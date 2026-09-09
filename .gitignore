@@ -1,0 +1,22 @@
+# Build directories
+/build/
+cmake-build-*/
+
+# Compiled artifacts
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+
+# Editor temporary files
+*.swp
+*.swo
+*~
+.#*
+\#*#
