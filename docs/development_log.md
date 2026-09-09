@@ -77,3 +77,11 @@
 - 关键设计：只读 Catalog，绑定结果拥有 Schema/Value 副本；整数 literal 按 int32 范围区分 INTEGER/BIGINT，严格匹配且 NULL 使用目标类型；投影使用列下标，沿用 Schema 唯一列名约束，暂拒绝重复投影。
 - 测试结果：从零构建无警告，全部 9 个测试及 ASan/UBSan 通过，git diff --check 通过。
 - 下一步：Logical Plan / Planner。
+
+## 阶段 10：Logical Plan + Planner
+
+- 做了什么：实现独立 PlanNode、CreateTablePlan、InsertPlan、SeqScanPlan 与 Planner。
+- 关键设计：直接复制 Bound 信息，不重复绑定或访问 Catalog；当前均为叶节点，CREATE/INSERT 无输出，扫描输出保持投影顺序；计划独立拥有 Schema 与 Value。
+- 测试结果：从零构建及检测版重编译无警告，全部 10 个测试及 ASan/UBSan 通过，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：Executor。
