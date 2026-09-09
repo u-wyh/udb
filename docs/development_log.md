@@ -62,3 +62,11 @@
 - 测试结果：从零构建无警告，全部 7 个测试及 ASan/UBSan 通过，重开恢复、损坏元数据和保存失败重试测试通过，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：SQL Parser 基础。
+
+## 阶段 8：SQL Lexer + Parser + AST
+
+- 做了什么：实现独立 Lexer、Token、手写 Parser 和 CREATE TABLE / INSERT / SELECT AST。
+- 关键设计：关键字忽略大小写、标识符保留原文；字符串支持 SQL 单引号转义，错误含行列位置；单语句必须消费到 EOF，不访问 Catalog、不执行 SQL。
+- 测试结果：从零构建及检测版重编译无警告，全部 8 个测试及 ASan/UBSan 通过，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：Binder。

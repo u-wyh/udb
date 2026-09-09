@@ -1,0 +1,116 @@
+#include "udb/sql/parser.h"
+
+#include <charconv>
+#include <limits>
+
+namespace udb::sql {
+namespace {
+
+std::int64_t IntegerValue(const Token& token) {
+    std::int64_t value = 0;
+    const auto end = token.text.data() + token.text.size();
+    const auto result = std::from_chars(token.text.data(), end, value);
+    if (result.ec != std::errc{} || result.ptr != end) {
+        throw SqlError("Integer literal exceeds signed 64-bit range", token.position);
+    }
+    return value;
+}
+
+}  // namespace
+
+Token Parser::Take(TokenType type, const char* expected) {
+    if (current_.type != type) { throw SqlError(std::string("Expected ") + expected, current_.position); }
+    auto token = current_;
+    current_ = lexer_.Next();
+    return token;
+}
+
+bool Parser::Match(TokenType type) {
+    if (current_.type != type) { return false; }
+    current_ = lexer_.Next();
+    return true;
+}
+
+Statement Parser::Parse(std::string_view input) {
+    Parser parser(input);
+    Statement statement;
+    switch (parser.current_.type) {
+        case TokenType::Create: statement = parser.CreateTable(); break;
+        case TokenType::Insert: statement = parser.Insert(); break;
+        case TokenType::Select: statement = parser.Select(); break;
+        default: throw SqlError("Expected CREATE, INSERT or SELECT", parser.current_.position);
+    }
+    parser.Match(TokenType::Semicolon);
+    parser.Take(TokenType::End, "end of input");
+    return statement;
+}
+
+CreateTableStatement Parser::CreateTable() {
+    Take(TokenType::Create, "CREATE");
+    Take(TokenType::Table, "TABLE");
+    CreateTableStatement statement;
+    statement.table_name = Take(TokenType::Identifier, "table name").text;
+    Take(TokenType::LeftParen, "(");
+    do {
+        ColumnDefinition column;
+        column.name = Take(TokenType::Identifier, "column name").text;
+        if (Match(TokenType::Integer)) { column.type = TypeId::INTEGER; }
+        else if (Match(TokenType::BigInt)) { column.type = TypeId::BIGINT; }
+        else if (Match(TokenType::Boolean)) { column.type = TypeId::BOOLEAN; }
+        else if (Match(TokenType::Varchar)) {
+            column.type = TypeId::VARCHAR;
+            Take(TokenType::LeftParen, "(");
+            const auto token = Take(TokenType::IntegerLiteral, "VARCHAR length");
+            const auto length = IntegerValue(token);
+            if (length <= 0 || static_cast<std::uint64_t>(length) > std::numeric_limits<std::uint32_t>::max()) {
+                throw SqlError("VARCHAR length must be in 1..4294967295", token.position);
+            }
+            column.max_length = static_cast<std::uint32_t>(length);
+            Take(TokenType::RightParen, ")");
+        } else {
+            throw SqlError("Expected column type", current_.position);
+        }
+        statement.columns.push_back(std::move(column));
+    } while (Match(TokenType::Comma));
+    Take(TokenType::RightParen, ")");
+    return statement;
+}
+
+Literal Parser::ParseLiteral() {
+    switch (current_.type) {
+        case TokenType::IntegerLiteral: return IntegerValue(Take(TokenType::IntegerLiteral, "integer"));
+        case TokenType::StringLiteral: return Take(TokenType::StringLiteral, "string").text;
+        case TokenType::True: Take(TokenType::True, "TRUE"); return true;
+        case TokenType::False: Take(TokenType::False, "FALSE"); return false;
+        case TokenType::Null: Take(TokenType::Null, "NULL"); return std::monostate{};
+        default: throw SqlError("Expected literal", current_.position);
+    }
+}
+
+InsertStatement Parser::Insert() {
+    Take(TokenType::Insert, "INSERT");
+    Take(TokenType::Into, "INTO");
+    InsertStatement statement;
+    statement.table_name = Take(TokenType::Identifier, "table name").text;
+    Take(TokenType::Values, "VALUES");
+    Take(TokenType::LeftParen, "(");
+    do { statement.values.push_back(ParseLiteral()); } while (Match(TokenType::Comma));
+    Take(TokenType::RightParen, ")");
+    return statement;
+}
+
+SelectStatement Parser::Select() {
+    Take(TokenType::Select, "SELECT");
+    SelectStatement statement;
+    if (Match(TokenType::Star)) {
+        statement.select_all = true;
+    } else {
+        do { statement.column_names.push_back(Take(TokenType::Identifier, "column name").text); }
+        while (Match(TokenType::Comma));
+    }
+    Take(TokenType::From, "FROM");
+    statement.table_name = Take(TokenType::Identifier, "table name").text;
+    return statement;
+}
+
+}  // namespace udb::sql
