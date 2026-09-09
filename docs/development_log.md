@@ -46,3 +46,11 @@
 - 测试结果：从零构建无警告，全部 5 个测试及 ASan/UBSan 通过，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：Catalog 与表元数据。
+
+## 阶段 6：Catalog + TableMetadata
+
+- 做了什么：实现内存 Catalog，管理表元数据和 TableHeap，支持创建、按 ID/名称查询与列举。
+- 关键设计：uint64_t 表 ID 单调递增，表名区分大小写且唯一；完整创建后登记，统一拥有元数据与表；不持久化 Catalog、不自动刷盘。
+- 测试结果：从零构建无警告，全部 6 个测试及 ASan/UBSan 通过，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：Catalog 持久化与数据库元数据。
