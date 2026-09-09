@@ -18,6 +18,9 @@ target_link_libraries(udb_catalog PUBLIC udb_storage udb_types)
 add_library(udb_sql src/sql/lexer.cpp src/sql/parser.cpp)
 target_include_directories(udb_sql PUBLIC include)
 
+add_library(udb_binder src/sql/binder.cpp)
+target_link_libraries(udb_binder PUBLIC udb_sql udb_catalog)
+
 add_executable(udb src/main.cpp)
 target_link_libraries(udb PRIVATE udb_storage)
 
@@ -54,8 +57,12 @@ add_executable(udb_sql_test tests/sql_test.cpp)
 target_link_libraries(udb_sql_test PRIVATE udb_sql)
 add_test(NAME sql COMMAND udb_sql_test)
 
+add_executable(udb_binder_test tests/binder_test.cpp)
+target_link_libraries(udb_binder_test PRIVATE udb_binder)
+add_test(NAME binder COMMAND udb_binder_test)
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    foreach(target udb udb_storage udb_storage_test udb_buffer_pool_test udb_slotted_page_test udb_table_heap_test udb_types udb_tuple_test udb_catalog udb_catalog_test udb_database_test udb_sql udb_sql_test)
+    foreach(target udb udb_storage udb_storage_test udb_buffer_pool_test udb_slotted_page_test udb_table_heap_test udb_types udb_tuple_test udb_catalog udb_catalog_test udb_database_test udb_sql udb_sql_test udb_binder udb_binder_test)
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
     endforeach()
 endif()
