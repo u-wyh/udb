@@ -2,14 +2,23 @@ cmake_minimum_required(VERSION 3.22)
 
 project(udb LANGUAGES CXX)
 
-add_executable(udb src/main.cpp)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-set_target_properties(udb PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED ON
-    CXX_EXTENSIONS OFF
-)
+add_library(udb_storage src/disk_manager.cpp)
+target_include_directories(udb_storage PUBLIC include)
+
+add_executable(udb src/main.cpp)
+target_link_libraries(udb PRIVATE udb_storage)
+
+enable_testing()
+add_executable(udb_storage_test tests/storage_test.cpp)
+target_link_libraries(udb_storage_test PRIVATE udb_storage)
+add_test(NAME storage COMMAND udb_storage_test)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(udb PRIVATE -Wall -Wextra -Wpedantic)
+    foreach(target udb udb_storage udb_storage_test)
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    endforeach()
 endif()
