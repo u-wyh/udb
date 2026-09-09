@@ -4,6 +4,27 @@
 
 namespace udb {
 
+void Catalog::RestoreTable(const TableMetadata& metadata) {
+    if (tables_.count(metadata.GetTableId()) != 0) {
+        throw std::runtime_error("Duplicate metadata table ID");
+    }
+    for (const auto& item : tables_) {
+        if (item.second->metadata.GetTableName() == metadata.GetTableName() ||
+            item.second->metadata.GetFirstPageId() == metadata.GetFirstPageId()) {
+            throw std::runtime_error("Duplicate metadata table name or first page");
+        }
+    }
+    auto entry = std::make_unique<Entry>(pool_, metadata);
+    tables_.emplace(metadata.GetTableId(), std::move(entry));
+}
+
+void Catalog::RestoreNextId(table_id_t next_id) {
+    if (!tables_.empty() && next_id <= tables_.rbegin()->first) {
+        throw std::runtime_error("Invalid metadata next table ID");
+    }
+    next_id_ = next_id;
+}
+
 const TableMetadata& Catalog::CreateTable(const std::string& name, const Schema& schema) {
     if (name.empty()) {
         throw std::invalid_argument("Table name must not be empty");

@@ -29,9 +29,14 @@ public:
     std::vector<table_id_t> ListTables() const;  // Ascending ID order; snapshot.
 
 private:
+    friend class Database;
+    void RestoreTable(const TableMetadata& metadata);
+    void RestoreNextId(table_id_t next_id);
     struct Entry {
         Entry(BufferPoolManager& pool, table_id_t id, const std::string& name, const Schema& schema)
             : heap(pool), metadata(id, name, schema, heap.GetFirstPageId()) {}
+        Entry(BufferPoolManager& pool, const TableMetadata& saved)
+            : heap(pool, saved.GetFirstPageId()), metadata(saved) {}
         TableHeap heap;
         TableMetadata metadata;
     };

@@ -54,3 +54,11 @@
 - 测试结果：从零构建无警告，全部 6 个测试及 ASan/UBSan 通过，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：Catalog 持久化与数据库元数据。
+
+## 阶段 7：Catalog Persistence + Database
+
+- 做了什么：实现 Database 创建、打开、显式 Flush/Close，以及 Catalog、Schema 和表链恢复。
+- 关键设计：独立 .meta 使用版本化小端编码并严格校验；先刷数据再通过 .meta.tmp 替换元数据；Open 复用已有页并恢复 next_table_id。独立 .meta 是当前 bootstrap 设计，未来可能演进为统一数据库文件。
+- 测试结果：从零构建无警告，全部 7 个测试及 ASan/UBSan 通过，重开恢复、损坏元数据和保存失败重试测试通过，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：SQL Parser 基础。
