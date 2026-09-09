@@ -38,3 +38,11 @@
 - 测试结果：从零构建无警告，全部 4 个测试及 ASan/UBSan 通过，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：基础类型系统、Schema 与 Tuple。
+
+## 阶段 5：Type + Schema + Tuple
+
+- 做了什么：实现四种基础类型、Value、Column、Schema 与 Tuple，以及 Tuple/Record 转换和存储集成。
+- 关键设计：严格类型与带类型 NULL；VARCHAR 按字节限长；显式小端编码并校验边界，TableHeap 保持仅存 Record。
+- 测试结果：从零构建无警告，全部 5 个测试及 ASan/UBSan 通过，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：Catalog 与表元数据。
