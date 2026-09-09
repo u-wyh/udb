@@ -23,3 +23,10 @@
 - 测试结果：从零 CMake 构建成功，无警告；全部存储与 Buffer Pool 测试通过，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：评审上层存储需求，确定下一阶段范围。
+
+## 阶段 3：Record + Slotted Page
+
+- 做了什么：实现二进制 Record、可比较 RID，以及页内变长记录插入、读取、删除压缩和 next_page_id。
+- 关键设计：显式小端布局与边界校验；删除压缩保持其他 RID 稳定；不复用删除槽以防旧 RID 指向新记录，槽目录空间保留。
+- 测试结果：从零构建无警告，全部测试及 ASan/UBSan 检查通过，git diff --check 通过。
+- 下一步：TableHeap。
