@@ -146,6 +146,26 @@ void SlottedPage::DeleteRecord(RID rid) {
     page_ = compacted;
 }
 
+std::optional<RID> SlottedPage::GetFirstRID() const {
+    Validate();
+    for (std::size_t i = 0; i < Read(page_, 4, 2); ++i) {
+        if (Read(page_, HEADER_SIZE + i * SLOT_SIZE + 4, 2) == 1) {
+            return RID{page_id_, static_cast<slot_id_t>(i)};
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<RID> SlottedPage::GetNextRID(RID current) const {
+    FindSlot(current);
+    for (std::size_t i = static_cast<std::size_t>(current.slot_id) + 1; i < Read(page_, 4, 2); ++i) {
+        if (Read(page_, HEADER_SIZE + i * SLOT_SIZE + 4, 2) == 1) {
+            return RID{page_id_, static_cast<slot_id_t>(i)};
+        }
+    }
+    return std::nullopt;
+}
+
 page_id_t SlottedPage::GetNextPageId() const {
     Validate();
     const auto next = Read(page_, 8, 8);

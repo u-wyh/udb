@@ -21,6 +21,8 @@ public:
     std::optional<RID> InsertRecord(const Record& record);
     Record GetRecord(RID rid) const;
     void DeleteRecord(RID rid);
+    std::optional<RID> GetFirstRID() const;
+    std::optional<RID> GetNextRID(RID current) const;  // Current must be live.
     // Maximum payload of the next insertion, excluding its new slot overhead.
     // Zero can mean no room even for a slot; InsertRecord remains authoritative.
     std::size_t GetFreeSpace() const;

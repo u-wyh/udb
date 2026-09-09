@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_library(udb_storage src/disk_manager.cpp src/buffer_pool_manager.cpp src/slotted_page.cpp)
+add_library(udb_storage src/disk_manager.cpp src/buffer_pool_manager.cpp src/slotted_page.cpp src/table_heap.cpp)
 target_include_directories(udb_storage PUBLIC include)
 
 add_executable(udb src/main.cpp)
@@ -25,8 +25,12 @@ add_executable(udb_slotted_page_test tests/slotted_page_test.cpp)
 target_link_libraries(udb_slotted_page_test PRIVATE udb_storage)
 add_test(NAME slotted_page COMMAND udb_slotted_page_test)
 
+add_executable(udb_table_heap_test tests/table_heap_test.cpp)
+target_link_libraries(udb_table_heap_test PRIVATE udb_storage)
+add_test(NAME table_heap COMMAND udb_table_heap_test)
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    foreach(target udb udb_storage udb_storage_test udb_buffer_pool_test udb_slotted_page_test)
+    foreach(target udb udb_storage udb_storage_test udb_buffer_pool_test udb_slotted_page_test udb_table_heap_test)
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
     endforeach()
 endif()

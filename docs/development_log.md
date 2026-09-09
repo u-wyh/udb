@@ -30,3 +30,11 @@
 - 关键设计：显式小端布局与边界校验；删除压缩保持其他 RID 稳定；不复用删除槽以防旧 RID 指向新记录，槽目录空间保留。
 - 测试结果：从零构建无警告，全部测试及 ASan/UBSan 检查通过，git diff --check 通过。
 - 下一步：TableHeap。
+
+## 阶段 4：TableHeap
+
+- 做了什么：实现多页表的创建、重开、插入、读取、删除与顺序扫描。
+- 关键设计：仅通过 Buffer Pool 访问页面，局部 RAII 释放 pin；递增页链仅在链尾扩展，支持单 frame；调用方保存 first_page_id 并显式刷盘。
+- 测试结果：从零构建无警告，全部 4 个测试及 ASan/UBSan 通过，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：基础类型系统、Schema 与 Tuple。
