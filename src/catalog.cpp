@@ -85,10 +85,25 @@ void Catalog::DropTable(table_id_t id) {
     if (found == tables_.end()) { throw std::out_of_range("Table ID not found"); }
     found->second->heap.DeletePages();
     for (auto index = indexes_.begin(); index != indexes_.end();) {
-        if (index->second->GetMetadata().GetTableId() == id) { index = indexes_.erase(index); }
-        else { ++index; }
+        if (index->second->GetMetadata().GetTableId() != id) {
+            ++index;
+            continue;
+        }
+        index->second->GetTree().DeletePages();
+        index = indexes_.erase(index);
     }
     tables_.erase(found);
+}
+
+void Catalog::DropIndex(index_id_t id) {
+    const auto found = indexes_.find(id);
+    if (found == indexes_.end()) { throw std::out_of_range("Index ID not found"); }
+    found->second->GetTree().DeletePages();
+    indexes_.erase(found);
+}
+
+void Catalog::DropIndex(const std::string& name) {
+    DropIndex(GetIndex(name).GetMetadata().GetIndexId());
 }
 
 const TableMetadata& Catalog::GetTable(table_id_t id) const { return tables_.at(id)->metadata; }

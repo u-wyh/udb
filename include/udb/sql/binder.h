@@ -22,6 +22,7 @@ private:
     BoundCreateTableStatement BindStatement(const CreateTableStatement& statement) const;
     BoundCreateIndexStatement BindStatement(const CreateIndexStatement& statement) const;
     BoundDropTableStatement BindStatement(const DropTableStatement& statement) const;
+    BoundDropIndexStatement BindStatement(const DropIndexStatement& statement) const;
     BoundInsertStatement BindStatement(const InsertStatement& statement) const;
     BoundSelectStatement BindStatement(const SelectStatement& statement) const;
     BoundDeleteStatement BindStatement(const DeleteStatement& statement) const;

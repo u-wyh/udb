@@ -189,3 +189,12 @@
 - 当前限制：无 ORDER BY 保证、成本模型、复合索引和 index-only scan。
 - Commit：见 Git 历史
 - 下一步：阶段 23：DROP INDEX 与索引页面回收。
+
+## 阶段 23：DROP INDEX + 索引页面回收
+
+- 做了什么：实现 Catalog 与 SQL DROP INDEX，并让 DROP INDEX / DROP TABLE 回收 B+ Tree 全部节点页和 header page。
+- 关键设计：删除前完整验证页面集合并检查 pin 状态；索引 ID 保持单调且名称可复用；metadata 格式不变，Flush 仅保存当前索引。
+- 测试结果：从零构建无编译警告，23 / 23 测试及 ASan / UBSan 通过，覆盖多层树回收、拒绝 pinned page、Planner 回退、重开和页面复用，git diff --check 通过。
+- 当前限制：无 IF EXISTS、CASCADE/RESTRICT 和并发 DDL。
+- Commit：见 Git 历史
+- 下一步：阶段 24：SELECT LIMIT。

@@ -49,6 +49,8 @@ public:
     bool Insert(std::int64_t key, RID rid);
     // Missing keys return false without changing the tree.
     bool Remove(std::int64_t key);
+    // Explicit ownership teardown for DROP INDEX. The object is unusable after success.
+    void DeletePages();
 
     // Full structural checks used when reopening and by storage tests.
     void Validate() const;
@@ -72,6 +74,7 @@ private:
     void RefreshAncestors(page_id_t page_id);
     void RebalanceAfterDelete(page_id_t page_id, Node node);
     void DeleteNode(page_id_t page_id);
+    std::vector<page_id_t> CollectNodePageIds() const;
     page_id_t NewHeaderPage();
     void WriteHeader();
     static page_id_t ReadHeader(BufferPoolManager& pool, page_id_t header_page_id,

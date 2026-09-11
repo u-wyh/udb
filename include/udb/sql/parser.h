@@ -18,6 +18,7 @@ private:
     CreateTableStatement CreateTable();
     CreateIndexStatement CreateIndex();
     DropTableStatement DropTable();
+    DropIndexStatement DropIndex();
     InsertStatement Insert();
     SelectStatement Select();
     DeleteStatement Delete();

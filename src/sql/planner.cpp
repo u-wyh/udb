@@ -135,6 +135,10 @@ std::unique_ptr<PlanNode> Build(const BoundDropTableStatement& statement) {
     return std::make_unique<DropTablePlan>(statement.table_id);
 }
 
+std::unique_ptr<PlanNode> Build(const BoundDropIndexStatement& statement) {
+    return std::make_unique<DropIndexPlan>(statement.index_id);
+}
+
 std::unique_ptr<PlanNode> Build(const BoundInsertStatement& statement) {
     return std::make_unique<InsertPlan>(statement.table_id, statement.schema, statement.values);
 }

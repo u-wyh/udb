@@ -41,7 +41,12 @@ Statement Parser::Parse(std::string_view input) {
             else if (parser.current_.type == TokenType::Index) { statement = parser.CreateIndex(); }
             else { throw SqlError("Expected TABLE or INDEX", parser.current_.position); }
             break;
-        case TokenType::Drop: statement = parser.DropTable(); break;
+        case TokenType::Drop:
+            parser.Take(TokenType::Drop, "DROP");
+            if (parser.current_.type == TokenType::Table) { statement = parser.DropTable(); }
+            else if (parser.current_.type == TokenType::Index) { statement = parser.DropIndex(); }
+            else { throw SqlError("Expected TABLE or INDEX", parser.current_.position); }
+            break;
         case TokenType::Insert: statement = parser.Insert(); break;
         case TokenType::Select: statement = parser.Select(); break;
         case TokenType::Delete: statement = parser.Delete(); break;
@@ -96,9 +101,13 @@ CreateIndexStatement Parser::CreateIndex() {
 }
 
 DropTableStatement Parser::DropTable() {
-    Take(TokenType::Drop, "DROP");
     Take(TokenType::Table, "TABLE");
     return {Take(TokenType::Identifier, "table name").text};
+}
+
+DropIndexStatement Parser::DropIndex() {
+    Take(TokenType::Index, "INDEX");
+    return {Take(TokenType::Identifier, "index name").text};
 }
 
 Literal Parser::ParseLiteral() {

@@ -39,6 +39,8 @@ public:
     const Index& CreateIndex(const std::string& name, table_id_t table_id,
                              std::size_t column_index,
                              BPlusTreeOptions options = {});
+    void DropIndex(index_id_t id);
+    void DropIndex(const std::string& name);
     const Index& GetIndex(index_id_t id) const;
     const Index& GetIndex(const std::string& name) const;
     Index& GetIndex(index_id_t id);

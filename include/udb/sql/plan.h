@@ -11,7 +11,7 @@
 namespace udb::sql {
 
 enum class PlanType {
-    CreateTable, CreateIndex, DropTable, Insert, SeqScan, IndexScan,
+    CreateTable, CreateIndex, DropTable, DropIndex, Insert, SeqScan, IndexScan,
     IndexRangeScan, Delete, Update
 };
 
@@ -68,6 +68,16 @@ public:
 
 private:
     table_id_t table_id_;
+};
+
+class DropIndexPlan final : public PlanNode {
+public:
+    explicit DropIndexPlan(index_id_t id)
+        : PlanNode(PlanType::DropIndex, Schema({})), index_id_(id) {}
+    index_id_t GetIndexId() const { return index_id_; }
+
+private:
+    index_id_t index_id_;
 };
 
 class InsertPlan final : public PlanNode {

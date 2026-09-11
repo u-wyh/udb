@@ -1,6 +1,7 @@
 #pragma once
 
 #include "udb/table_metadata.h"
+#include "udb/index_metadata.h"
 #include "udb/sql/bound_expression.h"
 #include "udb/value.h"
 
@@ -23,6 +24,11 @@ struct BoundCreateIndexStatement {
 struct BoundDropTableStatement {
     table_id_t table_id;
     std::string table_name;
+};
+
+struct BoundDropIndexStatement {
+    index_id_t index_id;
+    std::string index_name;
 };
 
 struct BoundInsertStatement {
@@ -61,7 +67,7 @@ struct BoundUpdateStatement {
 };
 
 using BoundStatement = std::variant<BoundCreateTableStatement, BoundCreateIndexStatement,
-                                    BoundDropTableStatement, BoundInsertStatement,
+                                    BoundDropTableStatement, BoundDropIndexStatement, BoundInsertStatement,
                                     BoundSelectStatement, BoundDeleteStatement, BoundUpdateStatement>;
 
 }  // namespace udb::sql

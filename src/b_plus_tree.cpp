@@ -385,6 +385,48 @@ bool BPlusTree::Remove(std::int64_t key) {
     return true;
 }
 
+std::vector<page_id_t> BPlusTree::CollectNodePageIds() const {
+    std::vector<page_id_t> result;
+    std::vector<page_id_t> pending{root_page_id_};
+    std::unordered_set<page_id_t> seen;
+    while (!pending.empty()) {
+        const auto page_id = pending.back();
+        pending.pop_back();
+        if (!seen.insert(page_id).second) {
+            throw std::runtime_error("B+ tree contains a cycle or shared child");
+        }
+        const auto node = ReadNode(page_id);
+        result.push_back(page_id);
+        if (!node.leaf) {
+            pending.insert(pending.end(), node.children.begin(), node.children.end());
+        }
+    }
+    return result;
+}
+
+void BPlusTree::DeletePages() {
+    Validate();
+    auto page_ids = CollectNodePageIds();
+    if (header_page_id_ >= 0) {
+        if (std::find(page_ids.begin(), page_ids.end(), header_page_id_) != page_ids.end()) {
+            throw std::runtime_error("B+ tree header aliases a node page");
+        }
+        page_ids.push_back(header_page_id_);
+    }
+    for (const auto page_id : page_ids) {
+        if (!pool_.CanDeletePage(page_id)) {
+            throw std::runtime_error("Cannot drop an index with pinned pages");
+        }
+    }
+    for (const auto page_id : page_ids) {
+        if (!pool_.DeletePage(page_id)) {
+            throw std::runtime_error("B+ tree page became pinned during index deletion");
+        }
+    }
+    root_page_id_ = -1;
+    header_page_id_ = -1;
+}
+
 std::int64_t BPlusTree::GetMinimumKey(page_id_t page_id) const {
     std::unordered_set<page_id_t> seen;
     while (true) {

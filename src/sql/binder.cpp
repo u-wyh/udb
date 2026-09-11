@@ -182,6 +182,15 @@ BoundDropTableStatement Binder::BindStatement(const DropTableStatement& statemen
     return {table.GetTableId(), table.GetTableName()};
 }
 
+BoundDropIndexStatement Binder::BindStatement(const DropIndexStatement& statement) const {
+    try {
+        const auto& metadata = catalog_.GetIndex(statement.index_name).GetMetadata();
+        return {metadata.GetIndexId(), metadata.GetIndexName()};
+    } catch (const std::out_of_range&) {
+        throw BindError("Index not found: " + statement.index_name);
+    }
+}
+
 BoundInsertStatement Binder::BindStatement(const InsertStatement& statement) const {
     const auto& table = Lookup(statement.table_name);
     const auto& schema = table.GetSchema();
