@@ -79,7 +79,7 @@ struct SelectStatement {
     bool select_all = false;
     std::vector<std::string> column_names;
     ExpressionPtr predicate = nullptr;
-    std::optional<OrderBy> order_by;
+    std::vector<OrderBy> order_by;
     std::optional<std::size_t> limit;
 };
 

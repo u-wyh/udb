@@ -49,7 +49,7 @@ struct BoundSelectStatement {
     std::vector<std::size_t> column_indexes;
     Schema output_schema;
     BoundExpressionPtr predicate = nullptr;
-    std::optional<BoundOrderBy> order_by;
+    std::vector<BoundOrderBy> order_by;
     std::optional<std::size_t> limit;
 };
 

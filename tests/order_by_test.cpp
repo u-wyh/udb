@@ -33,13 +33,12 @@ void CheckIds(const ExecutionResult& result, std::initializer_list<std::optional
 void TestSyntaxBindingAndPlanning(const std::filesystem::path& path) {
     const auto ast = std::get<SelectStatement>(
         Parser::Parse("SELECT id FROM t WHERE id > 0 ORDER BY name DESC LIMIT 2"));
-    Check(ast.order_by && ast.order_by->column_name == "name" && !ast.order_by->ascending,
+    Check(ast.order_by.size() == 1 && ast.order_by[0].column_name == "name" && !ast.order_by[0].ascending,
           "ORDER BY AST is wrong");
-    Check(std::get<SelectStatement>(Parser::Parse("SELECT * FROM t ORDER BY id")).order_by->ascending,
+    Check(std::get<SelectStatement>(Parser::Parse("SELECT * FROM t ORDER BY id")).order_by[0].ascending,
           "ORDER BY default direction is wrong");
     for (const auto sql : {"SELECT * FROM t ORDER id", "SELECT * FROM t ORDER BY",
                            "SELECT * FROM t ORDER BY id DESC ASC",
-                           "SELECT * FROM t ORDER BY id, name",
                            "SELECT * FROM t LIMIT 1 ORDER BY id"}) {
         Reject<SqlError>([&] { Parser::Parse(sql); });
     }
@@ -51,16 +50,16 @@ void TestSyntaxBindingAndPlanning(const std::filesystem::path& path) {
         Column("name", TypeId::VARCHAR, 20)})).GetTableId();
     catalog.CreateIndex("idx_id", id, 0);
     const auto bound = std::get<BoundSelectStatement>(Binder(catalog).Bind(Statement{ast}));
-    Check(bound.order_by && bound.order_by->column_index == 1 && !bound.order_by->ascending,
+    Check(bound.order_by.size() == 1 && bound.order_by[0].column_index == 1 && !bound.order_by[0].ascending,
           "Binder lost ORDER BY");
     const auto range = Planner::Plan(BoundStatement{bound}, catalog);
     const auto& range_scan = dynamic_cast<const IndexRangeScanPlan&>(*range);
-    Check(range_scan.GetOrderBy() && range_scan.GetOrderBy()->column_index == 1 &&
-          !range_scan.GetOrderBy()->ascending && range_scan.GetLimit() == 2,
+    Check(range_scan.GetOrderBy().size() == 1 && range_scan.GetOrderBy()[0].column_index == 1 &&
+          !range_scan.GetOrderBy()[0].ascending && range_scan.GetLimit() == 2,
           "Planner lost ORDER BY");
     const auto exact = Planner::Plan(Binder(catalog).Bind(
         Parser::Parse("SELECT id FROM t WHERE id = 1 ORDER BY id")), catalog);
-    Check(dynamic_cast<const IndexScanPlan&>(*exact).GetOrderBy().has_value(),
+    Check(!dynamic_cast<const IndexScanPlan&>(*exact).GetOrderBy().empty(),
           "IndexScan lost ORDER BY");
     Reject<BindError>([&] { Binder(catalog).Bind(Parser::Parse("SELECT id FROM t ORDER BY missing")); });
 }

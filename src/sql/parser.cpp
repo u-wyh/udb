@@ -147,10 +147,12 @@ SelectStatement Parser::Select() {
     if (Match(TokenType::Where)) { statement.predicate = ParseExpression(); }
     if (Match(TokenType::Order)) {
         Take(TokenType::By, "BY");
-        OrderBy order{Take(TokenType::Identifier, "column name").text, true};
-        if (Match(TokenType::Desc)) { order.ascending = false; }
-        else { Match(TokenType::Asc); }
-        statement.order_by = std::move(order);
+        do {
+            OrderBy order{Take(TokenType::Identifier, "column name").text, true};
+            if (Match(TokenType::Desc)) { order.ascending = false; }
+            else { Match(TokenType::Asc); }
+            statement.order_by.push_back(std::move(order));
+        } while (Match(TokenType::Comma));
     }
     if (Match(TokenType::Limit)) {
         const auto token = Take(TokenType::IntegerLiteral, "nonnegative LIMIT");

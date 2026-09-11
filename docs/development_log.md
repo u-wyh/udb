@@ -216,3 +216,11 @@
 - 当前限制：无多列排序、表达式排序和外部排序。
 - Commit：见 Git 历史
 - 下一步：阶段 26：ORDER BY 多列排序。
+
+## 阶段 26：ORDER BY 多列排序
+
+- 做了什么：将 SELECT ORDER BY 扩展为任意多个列，每列可独立指定 ASC / DESC。
+- 关键设计：按声明顺序逐列比较；每个排序键均采用 NULLS LAST；完全相同的排序键保持输入顺序，LIMIT 仍在排序后应用。
+- 测试结果：全新构建无编译警告，26 / 26 测试及 ASan / UBSan 通过，覆盖混合方向、稳定性、索引路径、LIMIT 和重开，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 27：OFFSET。

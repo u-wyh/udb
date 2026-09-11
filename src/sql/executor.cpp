@@ -74,7 +74,7 @@ struct IndexChange {
 void CheckScan(const Schema& source, const Schema& output,
                const std::vector<std::size_t>& indexes,
                const BoundExpressionPtr& predicate,
-               const std::optional<PlanOrderBy>& order_by) {
+               const std::vector<PlanOrderBy>& order_by) {
     if (indexes.size() != output.GetColumnCount()) {
         throw std::invalid_argument("Plan projection size mismatch");
     }
@@ -88,8 +88,10 @@ void CheckScan(const Schema& source, const Schema& output,
         throw std::invalid_argument("Plan predicate must be BOOLEAN");
     }
     CheckExpression(predicate, source);
-    if (order_by && order_by->column_index >= source.GetColumnCount()) {
-        throw std::invalid_argument("Plan ORDER BY column does not match catalog");
+    for (const auto& order : order_by) {
+        if (order.column_index >= source.GetColumnCount()) {
+            throw std::invalid_argument("Plan ORDER BY column does not match catalog");
+        }
     }
 }
 
@@ -114,43 +116,47 @@ bool ReachedLimit(const std::optional<std::size_t>& limit, std::size_t row_count
     return limit && row_count >= *limit;
 }
 
-bool OrderLess(const Tuple& left, const Tuple& right, const PlanOrderBy& order_by) {
-    const auto& a = left.GetValue(order_by.column_index);
-    const auto& b = right.GetValue(order_by.column_index);
-    if (a.IsNull() || b.IsNull()) {
-        if (a.IsNull() && b.IsNull()) { return false; }
-        return !a.IsNull();  // NULLS LAST for both directions.
+bool OrderLess(const Tuple& left, const Tuple& right,
+               const std::vector<PlanOrderBy>& order_by) {
+    for (const auto& order : order_by) {
+        const auto& a = left.GetValue(order.column_index);
+        const auto& b = right.GetValue(order.column_index);
+        if (a.IsNull() || b.IsNull()) {
+            if (a.IsNull() && b.IsNull()) { continue; }
+            return !a.IsNull();  // NULLS LAST for every key and direction.
+        }
+        bool less = false;
+        bool greater = false;
+        switch (a.GetType()) {
+            case TypeId::BOOLEAN:
+                less = !a.GetBoolean() && b.GetBoolean();
+                greater = a.GetBoolean() && !b.GetBoolean();
+                break;
+            case TypeId::INTEGER:
+                less = a.GetInteger() < b.GetInteger();
+                greater = a.GetInteger() > b.GetInteger();
+                break;
+            case TypeId::BIGINT:
+                less = a.GetBigInt() < b.GetBigInt();
+                greater = a.GetBigInt() > b.GetBigInt();
+                break;
+            case TypeId::VARCHAR:
+                less = a.GetVarchar() < b.GetVarchar();
+                greater = a.GetVarchar() > b.GetVarchar();
+                break;
+        }
+        if (less || greater) { return order.ascending ? less : greater; }
     }
-    bool less = false;
-    bool greater = false;
-    switch (a.GetType()) {
-        case TypeId::BOOLEAN:
-            less = !a.GetBoolean() && b.GetBoolean();
-            greater = a.GetBoolean() && !b.GetBoolean();
-            break;
-        case TypeId::INTEGER:
-            less = a.GetInteger() < b.GetInteger();
-            greater = a.GetInteger() > b.GetInteger();
-            break;
-        case TypeId::BIGINT:
-            less = a.GetBigInt() < b.GetBigInt();
-            greater = a.GetBigInt() > b.GetBigInt();
-            break;
-        case TypeId::VARCHAR:
-            less = a.GetVarchar() < b.GetVarchar();
-            greater = a.GetVarchar() > b.GetVarchar();
-            break;
-    }
-    return order_by.ascending ? less : greater;
+    return false;
 }
 
 void FinishScan(ExecutionResult& result, std::vector<Tuple> tuples,
                 const Schema& output, const std::vector<std::size_t>& indexes,
-                const std::optional<PlanOrderBy>& order_by,
+                const std::vector<PlanOrderBy>& order_by,
                 const std::optional<std::size_t>& limit) {
-    if (order_by) {
+    if (!order_by.empty()) {
         std::stable_sort(tuples.begin(), tuples.end(),
-            [&order_by](const Tuple& a, const Tuple& b) { return OrderLess(a, b, *order_by); });
+            [&order_by](const Tuple& a, const Tuple& b) { return OrderLess(a, b, order_by); });
     }
     for (const auto& tuple : tuples) {
         if (ReachedLimit(limit, result.rows.size())) { break; }
