@@ -304,6 +304,45 @@ std::optional<RID> BPlusTree::GetValue(std::int64_t key) const {
     return leaf.values[static_cast<std::size_t>(found - leaf.keys.begin())];
 }
 
+std::vector<std::pair<std::int64_t, RID>> BPlusTree::ScanRange(
+    std::optional<std::int64_t> lower, bool lower_inclusive,
+    std::optional<std::int64_t> upper, bool upper_inclusive) const {
+    std::vector<std::pair<std::int64_t, RID>> result;
+    if (lower && upper && (*lower > *upper ||
+        (*lower == *upper && (!lower_inclusive || !upper_inclusive)))) {
+        return result;
+    }
+
+    page_id_t page_id;
+    if (lower) {
+        page_id = FindLeaf(*lower, nullptr);
+    } else {
+        page_id = root_page_id_;
+        while (true) {
+            const auto node = ReadNode(page_id);
+            if (node.leaf) { break; }
+            page_id = node.children.front();
+        }
+    }
+
+    std::unordered_set<page_id_t> seen;
+    while (page_id != -1) {
+        if (!seen.insert(page_id).second) {
+            throw std::runtime_error("B+ tree range scan encountered a leaf cycle");
+        }
+        const auto leaf = ReadNode(page_id);
+        if (!leaf.leaf) { throw std::runtime_error("B+ tree leaf chain references an internal node"); }
+        for (std::size_t i = 0; i < leaf.keys.size(); ++i) {
+            const auto key = leaf.keys[i];
+            if (lower && (key < *lower || (key == *lower && !lower_inclusive))) { continue; }
+            if (upper && (key > *upper || (key == *upper && !upper_inclusive))) { return result; }
+            result.emplace_back(key, leaf.values[i]);
+        }
+        page_id = leaf.next_leaf;
+    }
+    return result;
+}
+
 bool BPlusTree::Insert(std::int64_t key, RID rid) {
     if (rid.page_id < 0) { throw std::invalid_argument("B+ tree RID page ID must be nonnegative"); }
     std::vector<page_id_t> path;

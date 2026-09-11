@@ -180,3 +180,12 @@
 - 当前限制：仅支持精确等值 IndexScan，无范围扫描、成本模型、复合索引和 index-only scan。
 - Commit：见 Git 历史
 - 下一步：阶段 22：B+ Tree Range Scan + 范围条件索引查询。
+
+## 阶段 22：B+ Tree Range Scan + 范围索引查询
+
+- 做了什么：实现 B+ Tree 有界与单边范围扫描，并让 Planner 为 INTEGER / BIGINT 范围条件生成 IndexRangeScanPlan。
+- 关键设计：通过 leaf chain 按 key 顺序扫描；支持正反向比较与 AND 上下界合并；完整 predicate 继续作为 residual filter，NULL、!= 与 OR 回退 SeqScan。
+- 测试结果：从零构建无编译警告，22 / 22 测试及 ASan / UBSan 通过，覆盖开闭边界、跨页、删除、DML、重开和 SeqScan 对照，git diff --check 通过。
+- 当前限制：无 ORDER BY 保证、成本模型、复合索引和 index-only scan。
+- Commit：见 Git 历史
+- 下一步：阶段 23：DROP INDEX 与索引页面回收。

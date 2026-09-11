@@ -118,8 +118,12 @@ add_executable(udb_index_scan_test tests/index_scan_test.cpp)
 target_link_libraries(udb_index_scan_test PRIVATE udb_sql_engine)
 add_test(NAME index_scan COMMAND udb_index_scan_test)
 
+add_executable(udb_range_scan_test tests/range_scan_test.cpp)
+target_link_libraries(udb_range_scan_test PRIVATE udb_sql_engine)
+add_test(NAME range_scan COMMAND udb_range_scan_test)
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    foreach(target udb udb_storage udb_storage_test udb_buffer_pool_test udb_slotted_page_test udb_table_heap_test udb_types udb_tuple_test udb_catalog udb_catalog_test udb_database_test udb_sql udb_sql_test udb_binder udb_binder_test udb_planner udb_planner_test udb_executor udb_executor_test udb_sql_engine udb_sql_engine_test udb_expression_test udb_delete_test udb_update_test udb_drop_table_test udb_free_page_test udb_b_plus_tree_test udb_create_index_test udb_index_maintenance_test udb_index_scan_test)
+    foreach(target udb udb_storage udb_storage_test udb_buffer_pool_test udb_slotted_page_test udb_table_heap_test udb_types udb_tuple_test udb_catalog udb_catalog_test udb_database_test udb_sql udb_sql_test udb_binder udb_binder_test udb_planner udb_planner_test udb_executor udb_executor_test udb_sql_engine udb_sql_engine_test udb_expression_test udb_delete_test udb_update_test udb_drop_table_test udb_free_page_test udb_b_plus_tree_test udb_create_index_test udb_index_maintenance_test udb_index_scan_test udb_range_scan_test)
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
     endforeach()
 endif()

@@ -47,10 +47,10 @@ void TestPlanning(const std::filesystem::path& path) {
     CheckPlanType(catalog, "SELECT * FROM plain WHERE id = 1", PlanType::SeqScan);
     CheckPlanType(catalog, "SELECT * FROM t", PlanType::SeqScan);
     CheckPlanType(catalog, "SELECT * FROM t WHERE id != 1", PlanType::SeqScan);
-    CheckPlanType(catalog, "SELECT * FROM t WHERE id < 1", PlanType::SeqScan);
-    CheckPlanType(catalog, "SELECT * FROM t WHERE id <= 1", PlanType::SeqScan);
-    CheckPlanType(catalog, "SELECT * FROM t WHERE id > 1", PlanType::SeqScan);
-    CheckPlanType(catalog, "SELECT * FROM t WHERE id >= 1", PlanType::SeqScan);
+    CheckPlanType(catalog, "SELECT * FROM t WHERE id < 1", PlanType::IndexRangeScan);
+    CheckPlanType(catalog, "SELECT * FROM t WHERE id <= 1", PlanType::IndexRangeScan);
+    CheckPlanType(catalog, "SELECT * FROM t WHERE id > 1", PlanType::IndexRangeScan);
+    CheckPlanType(catalog, "SELECT * FROM t WHERE id >= 1", PlanType::IndexRangeScan);
     CheckPlanType(catalog, "SELECT * FROM t WHERE id = NULL", PlanType::SeqScan);
     CheckPlanType(catalog, "SELECT * FROM t WHERE id = 1 OR id = 2", PlanType::SeqScan);
     CheckPlanType(catalog, "SELECT * FROM t WHERE name = 'x'", PlanType::SeqScan);
@@ -111,9 +111,9 @@ void TestExecutionAndPersistence(const std::filesystem::path& path) {
         engine.ExecuteSQL("INSERT INTO t VALUES (NULL, NULL, 'null')");
         result = engine.ExecuteSQL("SELECT * FROM t WHERE id = NULL");
         Check(result.type == PlanType::SeqScan && result.rows.empty(), "NULL equality semantics changed");
-        Check(engine.ExecuteSQL("SELECT * FROM t WHERE id > 5").type == PlanType::SeqScan &&
+        Check(engine.ExecuteSQL("SELECT * FROM t WHERE id > 5").type == PlanType::IndexRangeScan &&
               engine.ExecuteSQL("SELECT * FROM t WHERE id = 5 OR id = 6").type == PlanType::SeqScan,
-              "Unsupported predicate incorrectly used IndexScan");
+              "Range/OR predicate used the wrong scan path");
         result = engine.ExecuteSQL("SELECT id FROM t WHERE id = 5 AND name = 'wrong'");
         Check(result.type == PlanType::IndexScan && result.rows.empty(), "Residual predicate was not evaluated");
 

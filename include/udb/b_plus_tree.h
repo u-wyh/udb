@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace udb {
@@ -40,6 +41,10 @@ public:
     page_id_t GetRootPageId() const { return root_page_id_; }
     page_id_t GetHeaderPageId() const { return header_page_id_; }
     std::optional<RID> GetValue(std::int64_t key) const;
+    // Results are ordered by key. Missing bounds denote an open end.
+    std::vector<std::pair<std::int64_t, RID>> ScanRange(
+        std::optional<std::int64_t> lower, bool lower_inclusive,
+        std::optional<std::int64_t> upper, bool upper_inclusive) const;
     // Duplicate keys return false without changing the tree.
     bool Insert(std::int64_t key, RID rid);
     // Missing keys return false without changing the tree.

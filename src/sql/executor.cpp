@@ -188,6 +188,32 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             if (Matches(predicate, tuple)) { result.rows.push_back(Project(tuple, output, indexes)); }
             return result;
         }
+        case PlanType::IndexRangeScan: {
+            const auto& scan = dynamic_cast<const IndexRangeScanPlan&>(plan);
+            const auto& source = catalog_.GetTable(scan.GetTableId()).GetSchema();
+            const auto& output = scan.GetOutputSchema();
+            const auto& indexes = scan.GetColumnIndexes();
+            const auto& predicate = scan.GetPredicate();
+            CheckScan(source, output, indexes, predicate);
+            const auto& index = catalog_.GetIndex(scan.GetIndexId());
+            if (index.GetMetadata().GetTableId() != scan.GetTableId()) {
+                throw std::invalid_argument("Index range scan target does not match catalog");
+            }
+            ExecutionResult result{PlanType::IndexRangeScan};
+            result.output_schema = output;
+            const auto entries = index.GetTree().ScanRange(
+                scan.GetLowerBound(), scan.IsLowerInclusive(),
+                scan.GetUpperBound(), scan.IsUpperInclusive());
+            const auto& heap = catalog_.GetTableHeap(scan.GetTableId());
+            for (const auto& [key, rid] : entries) {
+                static_cast<void>(key);
+                const auto tuple = Tuple::Deserialize(heap.GetRecord(rid), source);
+                if (Matches(predicate, tuple)) {
+                    result.rows.push_back(Project(tuple, output, indexes));
+                }
+            }
+            return result;
+        }
         case PlanType::Delete: {
             const auto& deletion = dynamic_cast<const DeletePlan&>(plan);
             const auto& source = catalog_.GetTable(deletion.GetTableId()).GetSchema();

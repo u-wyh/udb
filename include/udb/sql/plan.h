@@ -6,10 +6,14 @@
 #include "udb/value.h"
 
 #include <memory>
+#include <optional>
 
 namespace udb::sql {
 
-enum class PlanType { CreateTable, CreateIndex, DropTable, Insert, SeqScan, IndexScan, Delete, Update };
+enum class PlanType {
+    CreateTable, CreateIndex, DropTable, Insert, SeqScan, IndexScan,
+    IndexRangeScan, Delete, Update
+};
 
 // Logical descriptions only. All current plans are leaves with no children.
 class PlanNode {
@@ -114,6 +118,37 @@ private:
     table_id_t table_id_;
     index_id_t index_id_;
     std::int64_t key_;
+    std::vector<std::size_t> indexes_;
+    BoundExpressionPtr predicate_;
+};
+
+class IndexRangeScanPlan final : public PlanNode {
+public:
+    IndexRangeScanPlan(table_id_t table_id, index_id_t index_id,
+                       std::optional<std::int64_t> lower, bool lower_inclusive,
+                       std::optional<std::int64_t> upper, bool upper_inclusive,
+                       std::vector<std::size_t> indexes, Schema output_schema,
+                       BoundExpressionPtr predicate)
+        : PlanNode(PlanType::IndexRangeScan, std::move(output_schema)), table_id_(table_id),
+          index_id_(index_id), lower_(lower), upper_(upper),
+          lower_inclusive_(lower_inclusive), upper_inclusive_(upper_inclusive),
+          indexes_(std::move(indexes)), predicate_(std::move(predicate)) {}
+    table_id_t GetTableId() const { return table_id_; }
+    index_id_t GetIndexId() const { return index_id_; }
+    const std::optional<std::int64_t>& GetLowerBound() const { return lower_; }
+    const std::optional<std::int64_t>& GetUpperBound() const { return upper_; }
+    bool IsLowerInclusive() const { return lower_inclusive_; }
+    bool IsUpperInclusive() const { return upper_inclusive_; }
+    const std::vector<std::size_t>& GetColumnIndexes() const { return indexes_; }
+    const BoundExpressionPtr& GetPredicate() const { return predicate_; }
+
+private:
+    table_id_t table_id_;
+    index_id_t index_id_;
+    std::optional<std::int64_t> lower_;
+    std::optional<std::int64_t> upper_;
+    bool lower_inclusive_;
+    bool upper_inclusive_;
     std::vector<std::size_t> indexes_;
     BoundExpressionPtr predicate_;
 };
