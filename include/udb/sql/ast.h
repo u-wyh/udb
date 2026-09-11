@@ -20,6 +20,10 @@ struct CreateTableStatement {
     std::vector<ColumnDefinition> columns;
 };
 
+struct DropTableStatement {
+    std::string table_name;
+};
+
 // NULL is untyped until binding. Integers use signed 64-bit literal range;
 // schema-specific narrowing belongs to binding.
 using Literal = std::variant<std::monostate, std::int64_t, std::string, bool>;
@@ -77,7 +81,7 @@ struct UpdateStatement {
     ExpressionPtr predicate = nullptr;
 };
 
-using Statement = std::variant<CreateTableStatement, InsertStatement, SelectStatement,
-                               DeleteStatement, UpdateStatement>;
+using Statement = std::variant<CreateTableStatement, DropTableStatement, InsertStatement,
+                               SelectStatement, DeleteStatement, UpdateStatement>;
 
 }  // namespace udb::sql

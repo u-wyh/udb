@@ -10,7 +10,7 @@ bool Digit(char c) { return c >= '0' && c <= '9'; }
 bool Space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'; }
 
 const std::unordered_map<std::string, TokenType> kKeywords = {
-    {"CREATE", TokenType::Create}, {"TABLE", TokenType::Table},
+    {"CREATE", TokenType::Create}, {"DROP", TokenType::Drop}, {"TABLE", TokenType::Table},
     {"INSERT", TokenType::Insert}, {"INTO", TokenType::Into}, {"VALUES", TokenType::Values},
     {"SELECT", TokenType::Select}, {"DELETE", TokenType::Delete},
     {"UPDATE", TokenType::Update}, {"SET", TokenType::Set},

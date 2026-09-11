@@ -8,7 +8,7 @@
 
 namespace udb::sql {
 
-enum class PlanType { CreateTable, Insert, SeqScan, Delete, Update };
+enum class PlanType { CreateTable, DropTable, Insert, SeqScan, Delete, Update };
 
 // Logical descriptions only. All current plans are leaves with no children.
 class PlanNode {
@@ -38,6 +38,16 @@ public:
 private:
     std::string table_name_;
     Schema schema_;
+};
+
+class DropTablePlan final : public PlanNode {
+public:
+    explicit DropTablePlan(table_id_t id)
+        : PlanNode(PlanType::DropTable, Schema({})), table_id_(id) {}
+    table_id_t GetTableId() const { return table_id_; }
+
+private:
+    table_id_t table_id_;
 };
 
 class InsertPlan final : public PlanNode {

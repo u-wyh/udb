@@ -43,6 +43,10 @@ const TableMetadata& Catalog::CreateTable(const std::string& name, const Schema&
     return inserted.first->second->metadata;
 }
 
+void Catalog::DropTable(table_id_t id) {
+    if (tables_.erase(id) == 0) { throw std::out_of_range("Table ID not found"); }
+}
+
 const TableMetadata& Catalog::GetTable(table_id_t id) const { return tables_.at(id)->metadata; }
 
 const TableMetadata& Catalog::GetTable(const std::string& name) const {

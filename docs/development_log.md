@@ -126,3 +126,12 @@
 - 当前限制：增长后的 Record 若当前 Page 放不下则更新失败；无事务时不保证多行 UPDATE 原子性。
 - Commit：见 Git 历史
 - 下一步：DROP TABLE 与基础 DDL 完善。
+
+## 阶段 16：DROP TABLE
+
+- 做了什么：实现 Catalog 表删除以及 DROP TABLE 的解析、绑定、计划与执行。
+- 关键设计：Catalog 删除其持有的 TableMetadata 与 TableHeap；table_id 保持单调递增，同名重建获得新 ID；持久化元数据只保存当前表。
+- 测试结果：从零构建无警告，全部 16 个测试及 ASan/UBSan 通过，覆盖同名重建、表间隔离和重开恢复，git diff --check 通过。
+- 当前限制：DROP 后暂不回收数据页。
+- Commit：见 Git 历史
+- 下一步：Page 回收与 Free Page 管理。

@@ -16,6 +16,7 @@ private:
     Token Take(TokenType type, const char* expected);
     bool Match(TokenType type);
     CreateTableStatement CreateTable();
+    DropTableStatement DropTable();
     InsertStatement Insert();
     SelectStatement Select();
     DeleteStatement Delete();

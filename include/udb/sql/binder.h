@@ -20,6 +20,7 @@ public:
 
 private:
     BoundCreateTableStatement BindStatement(const CreateTableStatement& statement) const;
+    BoundDropTableStatement BindStatement(const DropTableStatement& statement) const;
     BoundInsertStatement BindStatement(const InsertStatement& statement) const;
     BoundSelectStatement BindStatement(const SelectStatement& statement) const;
     BoundDeleteStatement BindStatement(const DeleteStatement& statement) const;

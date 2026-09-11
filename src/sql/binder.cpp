@@ -157,6 +157,11 @@ BoundCreateTableStatement Binder::BindStatement(const CreateTableStatement& stat
     return {statement.table_name, Schema(std::move(columns))};
 }
 
+BoundDropTableStatement Binder::BindStatement(const DropTableStatement& statement) const {
+    const auto& table = Lookup(statement.table_name);
+    return {table.GetTableId(), table.GetTableName()};
+}
+
 BoundInsertStatement Binder::BindStatement(const InsertStatement& statement) const {
     const auto& table = Lookup(statement.table_name);
     const auto& schema = table.GetSchema();

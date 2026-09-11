@@ -62,6 +62,11 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             catalog_.CreateTable(create.GetTableName(), create.GetTableSchema());
             return result;
         }
+        case PlanType::DropTable: {
+            const auto& drop = dynamic_cast<const DropTablePlan&>(plan);
+            catalog_.DropTable(drop.GetTableId());
+            return ExecutionResult{PlanType::DropTable};
+        }
         case PlanType::Insert: {
             const auto& insert = dynamic_cast<const InsertPlan&>(plan);
             const auto& schema = catalog_.GetTable(insert.GetTableId()).GetSchema();

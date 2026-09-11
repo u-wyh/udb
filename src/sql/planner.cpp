@@ -7,6 +7,10 @@ std::unique_ptr<PlanNode> Build(const BoundCreateTableStatement& statement) {
     return std::make_unique<CreateTablePlan>(statement.table_name, statement.schema);
 }
 
+std::unique_ptr<PlanNode> Build(const BoundDropTableStatement& statement) {
+    return std::make_unique<DropTablePlan>(statement.table_id);
+}
+
 std::unique_ptr<PlanNode> Build(const BoundInsertStatement& statement) {
     return std::make_unique<InsertPlan>(statement.table_id, statement.schema, statement.values);
 }

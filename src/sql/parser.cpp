@@ -36,11 +36,12 @@ Statement Parser::Parse(std::string_view input) {
     Statement statement;
     switch (parser.current_.type) {
         case TokenType::Create: statement = parser.CreateTable(); break;
+        case TokenType::Drop: statement = parser.DropTable(); break;
         case TokenType::Insert: statement = parser.Insert(); break;
         case TokenType::Select: statement = parser.Select(); break;
         case TokenType::Delete: statement = parser.Delete(); break;
         case TokenType::Update: statement = parser.Update(); break;
-        default: throw SqlError("Expected CREATE, INSERT, SELECT, DELETE or UPDATE", parser.current_.position);
+        default: throw SqlError("Expected CREATE, DROP, INSERT, SELECT, DELETE or UPDATE", parser.current_.position);
     }
     parser.Match(TokenType::Semicolon);
     parser.Take(TokenType::End, "end of input");
@@ -76,6 +77,12 @@ CreateTableStatement Parser::CreateTable() {
     } while (Match(TokenType::Comma));
     Take(TokenType::RightParen, ")");
     return statement;
+}
+
+DropTableStatement Parser::DropTable() {
+    Take(TokenType::Drop, "DROP");
+    Take(TokenType::Table, "TABLE");
+    return {Take(TokenType::Identifier, "table name").text};
 }
 
 Literal Parser::ParseLiteral() {

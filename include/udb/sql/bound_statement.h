@@ -14,6 +14,11 @@ struct BoundCreateTableStatement {
     Schema schema;
 };
 
+struct BoundDropTableStatement {
+    table_id_t table_id;
+    std::string table_name;
+};
+
 struct BoundInsertStatement {
     table_id_t table_id;
     std::string table_name;
@@ -49,7 +54,7 @@ struct BoundUpdateStatement {
     BoundExpressionPtr predicate = nullptr;
 };
 
-using BoundStatement = std::variant<BoundCreateTableStatement, BoundInsertStatement,
+using BoundStatement = std::variant<BoundCreateTableStatement, BoundDropTableStatement, BoundInsertStatement,
                                     BoundSelectStatement, BoundDeleteStatement, BoundUpdateStatement>;
 
 }  // namespace udb::sql

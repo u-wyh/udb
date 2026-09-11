@@ -115,7 +115,7 @@ void TestSelectAndErrors() {
     for (const auto input : {"", " ", ";", "SELECT * t", "SELECT * FROM", "SELECT FROM t", "SELECT id, FROM t",
          "SELECT *, id FROM t", "SELECT id, * FROM t", "SELECT * FROM t WHERE", "SELECT * FROM t JOIN u",
          "SELECT * FROM t GROUP BY id", "SELECT * FROM t ORDER BY id", "SELECT * FROM t LIMIT 1", "SELECT count(*) FROM t",
-         "SELECT * FROM t;;", "SELECT * FROM t; SELECT * FROM u", "UPDATE t", "DELETE t", "DROP TABLE t", "ALTER TABLE t"}) {
+         "SELECT * FROM t;;", "SELECT * FROM t; SELECT * FROM u", "UPDATE t", "DELETE t", "DROP t", "ALTER TABLE t"}) {
         Reject([&] { Parser::Parse(input); });
     }
     try {
