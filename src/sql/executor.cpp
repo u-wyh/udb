@@ -310,25 +310,46 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             const auto& source = catalog_.GetTable(aggregate.GetTableId()).GetSchema();
             const auto& specs = aggregate.GetAggregates();
             const auto& output = aggregate.GetOutputSchema();
-            if (specs.empty() || specs.size() != output.GetColumnCount()) {
+            const auto group_by = aggregate.GetGroupByColumn();
+            if (specs.empty() || specs.size() + (aggregate.ProjectsGroupBy() ? 1U : 0U) != output.GetColumnCount() ||
+                (group_by && *group_by >= source.GetColumnCount())) {
                 throw std::invalid_argument("Invalid aggregate plan");
             }
             CheckExpression(aggregate.GetPredicate(), source);
-            std::vector<std::optional<Value>> values(specs.size());
-            std::vector<std::uint64_t> counts(specs.size(), 0);
-            std::vector<std::int64_t> sums(specs.size(), 0);
-            std::vector<long double> average_sums(specs.size(), 0);
+            struct AggregateState {
+                explicit AggregateState(std::size_t size)
+                    : values(size), counts(size, 0), sums(size, 0), average_sums(size, 0) {}
+                std::optional<Value> group_key;
+                std::vector<std::optional<Value>> values;
+                std::vector<std::uint64_t> counts;
+                std::vector<std::int64_t> sums;
+                std::vector<long double> average_sums;
+            };
+            std::vector<AggregateState> states;
+            if (!group_by) { states.emplace_back(specs.size()); }
             const auto& heap = catalog_.GetTableHeap(aggregate.GetTableId());
             for (auto rid = heap.GetFirstRID(); rid; rid = heap.GetNextRID(*rid)) {
                 const auto tuple = Tuple::Deserialize(heap.GetRecord(*rid), source);
                 if (!Matches(aggregate.GetPredicate(), tuple)) { continue; }
+                std::size_t state_index = 0;
+                if (group_by) {
+                    const auto& key = tuple.GetValue(*group_by);
+                    while (state_index < states.size() && states[state_index].group_key != key) {
+                        ++state_index;
+                    }
+                    if (state_index == states.size()) {
+                        states.emplace_back(specs.size());
+                        states.back().group_key = key;
+                    }
+                }
+                auto& state = states[state_index];
                 for (std::size_t i = 0; i < specs.size(); ++i) {
                     const auto& spec = specs[i];
                     if (!spec.column_index) {
                         if (spec.type != AggregateType::Count) {
                             throw std::invalid_argument("Invalid aggregate star argument");
                         }
-                        ++counts[i];
+                        ++state.counts[i];
                         continue;
                     }
                     if (*spec.column_index >= source.GetColumnCount() ||
@@ -337,53 +358,58 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
                     }
                     const auto& value = tuple.GetValue(*spec.column_index);
                     if (value.IsNull()) { continue; }
-                    ++counts[i];
+                    ++state.counts[i];
                     if (spec.type == AggregateType::Count) { continue; }
                     if (spec.type == AggregateType::Sum) {
                         const auto number = spec.input_type == TypeId::INTEGER
                             ? static_cast<std::int64_t>(value.GetInteger()) : value.GetBigInt();
-                        if ((number > 0 && sums[i] > std::numeric_limits<std::int64_t>::max() - number) ||
-                            (number < 0 && sums[i] < std::numeric_limits<std::int64_t>::min() - number)) {
+                        if ((number > 0 && state.sums[i] > std::numeric_limits<std::int64_t>::max() - number) ||
+                            (number < 0 && state.sums[i] < std::numeric_limits<std::int64_t>::min() - number)) {
                             throw std::overflow_error("SUM overflow");
                         }
-                        sums[i] += number;
+                        state.sums[i] += number;
                     } else if (spec.type == AggregateType::Avg) {
-                        average_sums[i] += spec.input_type == TypeId::INTEGER
+                        state.average_sums[i] += spec.input_type == TypeId::INTEGER
                             ? static_cast<long double>(value.GetInteger())
                             : static_cast<long double>(value.GetBigInt());
-                    } else if (!values[i] ||
-                               (spec.type == AggregateType::Min && ValueLess(value, *values[i])) ||
-                               (spec.type == AggregateType::Max && ValueLess(*values[i], value))) {
-                        values[i] = value;
+                    } else if (!state.values[i] ||
+                               (spec.type == AggregateType::Min && ValueLess(value, *state.values[i])) ||
+                               (spec.type == AggregateType::Max && ValueLess(*state.values[i], value))) {
+                        state.values[i] = value;
                     }
-                }
-            }
-            std::vector<Value> row;
-            row.reserve(specs.size());
-            for (std::size_t i = 0; i < specs.size(); ++i) {
-                switch (specs[i].type) {
-                    case AggregateType::Count:
-                        if (counts[i] > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
-                            throw std::overflow_error("COUNT overflow");
-                        }
-                        row.push_back(Value::BigInt(static_cast<std::int64_t>(counts[i])));
-                        break;
-                    case AggregateType::Sum:
-                        row.push_back(counts[i] == 0 ? Value::Null(TypeId::BIGINT) : Value::BigInt(sums[i]));
-                        break;
-                    case AggregateType::Avg:
-                        row.push_back(counts[i] == 0 ? Value::Null(TypeId::DOUBLE) :
-                            Value::Double(static_cast<double>(average_sums[i] / counts[i])));
-                        break;
-                    case AggregateType::Min:
-                    case AggregateType::Max:
-                        row.push_back(values[i].value_or(Value::Null(specs[i].input_type)));
-                        break;
                 }
             }
             ExecutionResult result{PlanType::Aggregate};
             result.output_schema = output;
-            if (!ReachedLimit(aggregate.GetLimit(), 0) && aggregate.GetOffset() == 0) {
+            for (std::size_t position = 0; position < states.size(); ++position) {
+                if (position < aggregate.GetOffset()) { continue; }
+                if (ReachedLimit(aggregate.GetLimit(), result.rows.size())) { break; }
+                const auto& state = states[position];
+                std::vector<Value> row;
+                row.reserve(output.GetColumnCount());
+                if (aggregate.ProjectsGroupBy()) { row.push_back(*state.group_key); }
+                for (std::size_t i = 0; i < specs.size(); ++i) {
+                    switch (specs[i].type) {
+                        case AggregateType::Count:
+                            if (state.counts[i] > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+                                throw std::overflow_error("COUNT overflow");
+                            }
+                            row.push_back(Value::BigInt(static_cast<std::int64_t>(state.counts[i])));
+                            break;
+                        case AggregateType::Sum:
+                            row.push_back(state.counts[i] == 0 ? Value::Null(TypeId::BIGINT) :
+                                Value::BigInt(state.sums[i]));
+                            break;
+                        case AggregateType::Avg:
+                            row.push_back(state.counts[i] == 0 ? Value::Null(TypeId::DOUBLE) :
+                                Value::Double(static_cast<double>(state.average_sums[i] / state.counts[i])));
+                            break;
+                        case AggregateType::Min:
+                        case AggregateType::Max:
+                            row.push_back(state.values[i].value_or(Value::Null(specs[i].input_type)));
+                            break;
+                    }
+                }
                 result.rows.emplace_back(output, std::move(row));
             }
             return result;

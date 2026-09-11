@@ -89,6 +89,7 @@ struct SelectStatement {
     std::optional<std::size_t> limit;
     std::size_t offset = 0;
     std::vector<AggregateExpression> aggregates;
+    std::optional<std::string> group_by;
 };
 
 struct DeleteStatement {

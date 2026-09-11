@@ -157,16 +157,13 @@ SelectStatement Parser::Select() {
             const auto token = Take(TokenType::Identifier, "column name or aggregate");
             if (!Match(TokenType::LeftParen)) {
                 if (!statement.aggregates.empty()) {
-                    throw SqlError("Cannot mix aggregate and column projections", token.position);
+                    throw SqlError("GROUP BY column must precede aggregates", token.position);
                 }
                 statement.column_names.push_back(token.text);
                 continue;
             }
             const auto function = AggregateFunction(token.text);
             if (!function) { throw SqlError("Unknown aggregate function", token.position); }
-            if (!statement.column_names.empty()) {
-                throw SqlError("Cannot mix aggregate and column projections", token.position);
-            }
             AggregateExpression aggregate{*function, std::nullopt};
             if (*function == AggregateType::Count && Match(TokenType::Star)) {
                 // COUNT(*) counts every matching row.
@@ -180,6 +177,10 @@ SelectStatement Parser::Select() {
     Take(TokenType::From, "FROM");
     statement.table_name = Take(TokenType::Identifier, "table name").text;
     if (Match(TokenType::Where)) { statement.predicate = ParseExpression(); }
+    if (Match(TokenType::Group)) {
+        Take(TokenType::By, "BY");
+        statement.group_by = Take(TokenType::Identifier, "group column").text;
+    }
     if (Match(TokenType::Order)) {
         Take(TokenType::By, "BY");
         do {

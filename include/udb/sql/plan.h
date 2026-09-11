@@ -208,15 +208,19 @@ class AggregatePlan final : public PlanNode {
 public:
     AggregatePlan(table_id_t table_id, std::vector<PlanAggregate> aggregates,
                   Schema output_schema, BoundExpressionPtr predicate,
-                  std::optional<std::size_t> limit, std::size_t offset)
+                  std::optional<std::size_t> limit, std::size_t offset,
+                  std::optional<std::size_t> group_by_column, bool project_group_by)
         : PlanNode(PlanType::Aggregate, std::move(output_schema)), table_id_(table_id),
           aggregates_(std::move(aggregates)), predicate_(std::move(predicate)),
-          limit_(limit), offset_(offset) {}
+          limit_(limit), offset_(offset), group_by_column_(group_by_column),
+          project_group_by_(project_group_by) {}
     table_id_t GetTableId() const { return table_id_; }
     const std::vector<PlanAggregate>& GetAggregates() const { return aggregates_; }
     const BoundExpressionPtr& GetPredicate() const { return predicate_; }
     const std::optional<std::size_t>& GetLimit() const { return limit_; }
     std::size_t GetOffset() const { return offset_; }
+    const std::optional<std::size_t>& GetGroupByColumn() const { return group_by_column_; }
+    bool ProjectsGroupBy() const { return project_group_by_; }
 
 private:
     table_id_t table_id_;
@@ -224,6 +228,8 @@ private:
     BoundExpressionPtr predicate_;
     std::optional<std::size_t> limit_;
     std::size_t offset_;
+    std::optional<std::size_t> group_by_column_;
+    bool project_group_by_;
 };
 
 class DeletePlan final : public PlanNode {

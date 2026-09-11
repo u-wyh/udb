@@ -240,3 +240,11 @@
 - 测试结果：全新构建无编译警告，28 / 28 测试及 ASan / UBSan 通过，覆盖类型检查、空集、过滤、溢出和重开，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 29：单列 GROUP BY + Aggregate。
+
+## 阶段 29：单列 GROUP BY
+
+- 做了什么：为基础聚合增加单列 GROUP BY，支持输出或隐藏分组键。
+- 关键设计：NULL 形成一个独立组；组按首次出现顺序输出；过滤先于分组，LIMIT / OFFSET 后于分组。
+- 测试结果：全新构建无编译警告，29 / 29 测试及 ASan / UBSan 通过，覆盖聚合、NULL、过滤、空表、分页和重开，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 30：HAVING。

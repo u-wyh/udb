@@ -60,6 +60,8 @@ struct BoundSelectStatement {
     std::optional<std::size_t> limit;
     std::size_t offset = 0;
     std::vector<BoundAggregate> aggregates;
+    std::optional<std::size_t> group_by_column;
+    bool project_group_by = false;
 };
 
 struct BoundDeleteStatement {

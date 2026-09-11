@@ -220,14 +220,25 @@ BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) con
     const auto& schema = table.GetSchema();
     auto predicate = statement.predicate ? BindExpression(statement.predicate, schema, TypeId::BOOLEAN) : nullptr;
     if (!statement.aggregates.empty()) {
-        if (statement.select_all || !statement.column_names.empty()) {
-            throw BindError("Cannot mix aggregate and regular projections");
+        if (statement.select_all) { throw BindError("Cannot combine * with aggregate projections"); }
+        std::optional<std::size_t> group_by_column;
+        bool project_group_by = false;
+        std::vector<Column> output_columns;
+        if (statement.group_by) {
+            if (statement.column_names.size() > 1 ||
+                (!statement.column_names.empty() && statement.column_names[0] != *statement.group_by)) {
+                throw BindError("Non-aggregate SELECT columns must match GROUP BY");
+            }
+            group_by_column = FindColumn(schema, *statement.group_by);
+            project_group_by = !statement.column_names.empty();
+            if (project_group_by) { output_columns.push_back(schema.GetColumn(*group_by_column)); }
+        } else if (!statement.column_names.empty()) {
+            throw BindError("Regular columns require GROUP BY in an aggregate query");
         }
         if (!statement.order_by.empty()) {
             throw BindError("ORDER BY aggregates is not supported yet");
         }
         std::vector<BoundAggregate> aggregates;
-        std::vector<Column> output_columns;
         for (const auto& aggregate : statement.aggregates) {
             std::optional<std::size_t> column_index;
             TypeId input_type = TypeId::BOOLEAN;
@@ -252,8 +263,10 @@ BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) con
             aggregates.push_back({aggregate.type, column_index, input_type});
         }
         return {table.GetTableId(), table.GetTableName(), {}, Schema(std::move(output_columns)),
-                std::move(predicate), {}, statement.limit, statement.offset, std::move(aggregates)};
+                std::move(predicate), {}, statement.limit, statement.offset,
+                std::move(aggregates), group_by_column, project_group_by};
     }
+    if (statement.group_by) { throw BindError("GROUP BY requires aggregate projections"); }
     std::vector<std::size_t> indexes;
     if (statement.select_all) {
         if (!statement.column_names.empty()) { throw BindError("SELECT cannot combine * with column names"); }
@@ -278,7 +291,7 @@ BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) con
     }
     return {table.GetTableId(), table.GetTableName(), std::move(indexes),
             Schema(std::move(columns)), std::move(predicate), std::move(order_by),
-            statement.limit, statement.offset, {}};
+            statement.limit, statement.offset, {}, std::nullopt, false};
 }
 
 BoundDeleteStatement Binder::BindStatement(const DeleteStatement& statement) const {

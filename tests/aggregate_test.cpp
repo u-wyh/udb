@@ -29,7 +29,7 @@ void TestSyntaxBindingAndPlanning(const std::filesystem::path& path) {
           ast.aggregates[1].column_name == "id" && ast.predicate,
           "aggregate AST is wrong");
     for (const auto sql : {"SELECT COUNT() FROM t", "SELECT SUM(*) FROM t",
-                           "SELECT id, COUNT(*) FROM t", "SELECT COUNT(*), id FROM t",
+                           "SELECT COUNT(*), id FROM t",
                            "SELECT mystery(id) FROM t"}) {
         Reject<SqlError>([&] { Parser::Parse(sql); });
     }
@@ -53,6 +53,7 @@ void TestSyntaxBindingAndPlanning(const std::filesystem::path& path) {
     Reject<BindError>([&] { Binder(catalog).Bind(Parser::Parse("SELECT AVG(active) FROM t")); });
     Reject<BindError>([&] { Binder(catalog).Bind(Parser::Parse("SELECT COUNT(missing) FROM t")); });
     Reject<BindError>([&] { Binder(catalog).Bind(Parser::Parse("SELECT COUNT(*) FROM t ORDER BY id")); });
+    Reject<BindError>([&] { Binder(catalog).Bind(Parser::Parse("SELECT id, COUNT(*) FROM t")); });
 }
 
 void CheckAggregateRow(const ExecutionResult& result) {
