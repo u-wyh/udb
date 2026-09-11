@@ -42,6 +42,8 @@ public:
     std::optional<RID> GetValue(std::int64_t key) const;
     // Duplicate keys return false without changing the tree.
     bool Insert(std::int64_t key, RID rid);
+    // Missing keys return false without changing the tree.
+    bool Remove(std::int64_t key);
 
     // Full structural checks used when reopening and by storage tests.
     void Validate() const;
@@ -60,9 +62,15 @@ private:
     void SetParent(page_id_t page_id, page_id_t parent_page_id);
     void InsertIntoParent(page_id_t left_page_id, std::int64_t separator,
                           page_id_t right_page_id, std::vector<page_id_t> path);
+    std::int64_t GetMinimumKey(page_id_t page_id) const;
+    void RebuildInternalKeys(Node& node) const;
+    void RefreshAncestors(page_id_t page_id);
+    void RebalanceAfterDelete(page_id_t page_id, Node node);
+    void DeleteNode(page_id_t page_id);
     page_id_t NewHeaderPage();
     void WriteHeader();
-    static page_id_t ReadHeader(BufferPoolManager& pool, page_id_t header_page_id);
+    static page_id_t ReadHeader(BufferPoolManager& pool, page_id_t header_page_id,
+                                BPlusTreeOptions* options = nullptr);
 
     BufferPoolManager& pool_;
     page_id_t root_page_id_ = -1;

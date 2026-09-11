@@ -162,3 +162,12 @@
 - 当前限制：INSERT / UPDATE / DELETE 尚不维护索引，SELECT 尚不使用索引；无 DROP INDEX、非唯一索引和 B+ Tree Delete；失败创建索引或 DROP TABLE 后索引页面暂不回收。
 - Commit：见 Git 历史
 - 下一步：阶段 20：DML Index Maintenance。
+
+## 阶段 20：B+ Tree Delete + DML Index Maintenance
+
+- 做了什么：实现 B+ Tree 删除，并让 INSERT / UPDATE / DELETE 自动维护表上的全部索引。
+- 关键设计：借位或合并后重建 separator，合并页立即回收且 root collapse 同步 header；DML 先检查 unique 冲突，NULL 不进入索引，UPDATE 只处理实际变化的 indexed column。
+- 测试结果：从零构建无编译警告，20 / 20 测试及 ASan / UBSan 通过，覆盖多层删除、capacity=1、DML 冲突一致性和重开恢复，git diff --check 通过。
+- 当前限制：SELECT 仍使用 SeqScan；无 DROP INDEX、非唯一索引、事务、WAL 与 MVCC。
+- Commit：见 Git 历史
+- 下一步：阶段 21：Index Scan + Planner 索引选择。

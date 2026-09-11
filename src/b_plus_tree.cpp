@@ -114,7 +114,7 @@ std::unique_ptr<BPlusTree> BPlusTree::CreateWithHeader(
 
 std::unique_ptr<BPlusTree> BPlusTree::OpenWithHeader(
     BufferPoolManager& pool, page_id_t header_page_id, BPlusTreeOptions options) {
-    const auto root_page_id = ReadHeader(pool, header_page_id);
+    const auto root_page_id = ReadHeader(pool, header_page_id, &options);
     auto tree = std::make_unique<BPlusTree>(pool, root_page_id, options);
     if (header_page_id == root_page_id) { throw std::runtime_error("B+ tree header aliases its root"); }
     tree->header_page_id_ = header_page_id;
@@ -241,6 +241,8 @@ page_id_t BPlusTree::NewHeaderPage() {
     Write(encoded, 0, 8, kHeaderMagic);
     Write(encoded, 8, 4, kHeaderVersion);
     Write(encoded, 16, 8, EncodePageId(root_page_id_));
+    Write(encoded, 24, 8, options_.leaf_max_size);
+    Write(encoded, 32, 8, options_.internal_max_size);
     page.GetPage() = encoded;
     page.MarkDirty();
     return page.GetPageId();
@@ -252,12 +254,15 @@ void BPlusTree::WriteHeader() {
     Write(encoded, 0, 8, kHeaderMagic);
     Write(encoded, 8, 4, kHeaderVersion);
     Write(encoded, 16, 8, EncodePageId(root_page_id_));
+    Write(encoded, 24, 8, options_.leaf_max_size);
+    Write(encoded, 32, 8, options_.internal_max_size);
     PinnedPage page(pool_, header_page_id_);
     page.GetPage() = encoded;
     page.MarkDirty();
 }
 
-page_id_t BPlusTree::ReadHeader(BufferPoolManager& pool, page_id_t header_page_id) {
+page_id_t BPlusTree::ReadHeader(BufferPoolManager& pool, page_id_t header_page_id,
+                                BPlusTreeOptions* options) {
     if (header_page_id < 0) { throw std::invalid_argument("B+ tree header page ID must be nonnegative"); }
     PinnedPage page(pool, header_page_id);
     const auto& bytes = page.GetPage();
@@ -267,6 +272,15 @@ page_id_t BPlusTree::ReadHeader(BufferPoolManager& pool, page_id_t header_page_i
     }
     const auto root = DecodePageId(Read(bytes, 16, 8));
     if (root < 0) { throw std::runtime_error("Invalid B+ tree root in header"); }
+    const auto leaf_max_size = static_cast<std::size_t>(Read(bytes, 24, 8));
+    const auto internal_max_size = static_cast<std::size_t>(Read(bytes, 32, 8));
+    if ((leaf_max_size == 0) != (internal_max_size == 0)) {
+        throw std::runtime_error("Invalid B+ tree options in header");
+    }
+    if (options != nullptr && leaf_max_size != 0) {
+        options->leaf_max_size = leaf_max_size;
+        options->internal_max_size = internal_max_size;
+    }
     return root;
 }
 
@@ -318,6 +332,185 @@ bool BPlusTree::Insert(std::int64_t key, RID rid) {
     WriteNode(leaf_page_id, leaf);
     InsertIntoParent(leaf_page_id, right.keys.front(), right_page_id, std::move(path));
     return true;
+}
+
+bool BPlusTree::Remove(std::int64_t key) {
+    const auto leaf_page_id = FindLeaf(key, nullptr);
+    auto leaf = ReadNode(leaf_page_id);
+    const auto position = std::lower_bound(leaf.keys.begin(), leaf.keys.end(), key);
+    if (position == leaf.keys.end() || *position != key) { return false; }
+    const auto index = static_cast<std::size_t>(position - leaf.keys.begin());
+    leaf.keys.erase(position);
+    leaf.values.erase(leaf.values.begin() + static_cast<std::ptrdiff_t>(index));
+    RebalanceAfterDelete(leaf_page_id, std::move(leaf));
+    return true;
+}
+
+std::int64_t BPlusTree::GetMinimumKey(page_id_t page_id) const {
+    std::unordered_set<page_id_t> seen;
+    while (true) {
+        if (!seen.insert(page_id).second) {
+            throw std::runtime_error("B+ tree minimum-key search encountered a cycle");
+        }
+        const auto node = ReadNode(page_id);
+        if (node.leaf) {
+            if (node.keys.empty()) { throw std::runtime_error("B+ tree non-root subtree is empty"); }
+            return node.keys.front();
+        }
+        if (node.children.empty()) { throw std::runtime_error("B+ tree internal node has no children"); }
+        page_id = node.children.front();
+    }
+}
+
+void BPlusTree::RebuildInternalKeys(Node& node) const {
+    if (node.leaf || node.children.empty()) {
+        throw std::runtime_error("Cannot rebuild invalid B+ tree internal node");
+    }
+    node.keys.clear();
+    node.keys.reserve(node.children.size() - 1);
+    for (std::size_t i = 1; i < node.children.size(); ++i) {
+        node.keys.push_back(GetMinimumKey(node.children[i]));
+    }
+}
+
+void BPlusTree::RefreshAncestors(page_id_t page_id) {
+    auto parent_page_id = ReadNode(page_id).parent;
+    while (parent_page_id != -1) {
+        auto parent = ReadNode(parent_page_id);
+        RebuildInternalKeys(parent);
+        WriteNode(parent_page_id, parent);
+        parent_page_id = parent.parent;
+    }
+}
+
+void BPlusTree::DeleteNode(page_id_t page_id) {
+    if (!pool_.DeletePage(page_id)) {
+        throw std::runtime_error("Cannot delete pinned B+ tree page");
+    }
+}
+
+void BPlusTree::RebalanceAfterDelete(page_id_t page_id, Node node) {
+    if (page_id == root_page_id_) {
+        if (node.leaf) {
+            WriteNode(page_id, node);
+            return;
+        }
+        if (node.children.size() == 1) {
+            const auto old_root = root_page_id_;
+            root_page_id_ = node.children.front();
+            SetParent(root_page_id_, -1);
+            WriteHeader();
+            DeleteNode(old_root);
+            return;
+        }
+        RebuildInternalKeys(node);
+        WriteNode(page_id, node);
+        return;
+    }
+
+    const auto minimum = node.leaf ? (options_.leaf_max_size + 1) / 2
+                                   : options_.internal_max_size / 2;
+    if (node.keys.size() >= minimum) {
+        if (!node.leaf) { RebuildInternalKeys(node); }
+        WriteNode(page_id, node);
+        RefreshAncestors(page_id);
+        return;
+    }
+
+    const auto parent_page_id = node.parent;
+    auto parent = ReadNode(parent_page_id);
+    const auto child = std::find(parent.children.begin(), parent.children.end(), page_id);
+    if (child == parent.children.end()) {
+        throw std::runtime_error("B+ tree parent lost underfull child");
+    }
+    const auto index = static_cast<std::size_t>(child - parent.children.begin());
+
+    if (index > 0) {
+        const auto left_page_id = parent.children[index - 1];
+        auto left = ReadNode(left_page_id);
+        if (left.keys.size() > minimum) {
+            if (node.leaf) {
+                node.keys.insert(node.keys.begin(), left.keys.back());
+                node.values.insert(node.values.begin(), left.values.back());
+                left.keys.pop_back();
+                left.values.pop_back();
+            } else {
+                const auto moved = left.children.back();
+                left.children.pop_back();
+                node.children.insert(node.children.begin(), moved);
+                SetParent(moved, page_id);
+                RebuildInternalKeys(left);
+                RebuildInternalKeys(node);
+            }
+            WriteNode(left_page_id, left);
+            WriteNode(page_id, node);
+            RebuildInternalKeys(parent);
+            WriteNode(parent_page_id, parent);
+            RefreshAncestors(parent_page_id);
+            return;
+        }
+    }
+
+    if (index + 1 < parent.children.size()) {
+        const auto right_page_id = parent.children[index + 1];
+        auto right = ReadNode(right_page_id);
+        if (right.keys.size() > minimum) {
+            if (node.leaf) {
+                node.keys.push_back(right.keys.front());
+                node.values.push_back(right.values.front());
+                right.keys.erase(right.keys.begin());
+                right.values.erase(right.values.begin());
+            } else {
+                const auto moved = right.children.front();
+                right.children.erase(right.children.begin());
+                node.children.push_back(moved);
+                SetParent(moved, page_id);
+                RebuildInternalKeys(node);
+                RebuildInternalKeys(right);
+            }
+            WriteNode(page_id, node);
+            WriteNode(right_page_id, right);
+            RebuildInternalKeys(parent);
+            WriteNode(parent_page_id, parent);
+            RefreshAncestors(parent_page_id);
+            return;
+        }
+    }
+
+    if (index > 0) {
+        const auto left_page_id = parent.children[index - 1];
+        auto left = ReadNode(left_page_id);
+        if (node.leaf) {
+            left.keys.insert(left.keys.end(), node.keys.begin(), node.keys.end());
+            left.values.insert(left.values.end(), node.values.begin(), node.values.end());
+            left.next_leaf = node.next_leaf;
+        } else {
+            left.children.insert(left.children.end(), node.children.begin(), node.children.end());
+            for (const auto moved : node.children) { SetParent(moved, left_page_id); }
+            RebuildInternalKeys(left);
+        }
+        WriteNode(left_page_id, left);
+        parent.children.erase(parent.children.begin() + static_cast<std::ptrdiff_t>(index));
+        RebuildInternalKeys(parent);
+        DeleteNode(page_id);
+    } else {
+        const auto right_page_id = parent.children.at(1);
+        auto right = ReadNode(right_page_id);
+        if (node.leaf) {
+            node.keys.insert(node.keys.end(), right.keys.begin(), right.keys.end());
+            node.values.insert(node.values.end(), right.values.begin(), right.values.end());
+            node.next_leaf = right.next_leaf;
+        } else {
+            node.children.insert(node.children.end(), right.children.begin(), right.children.end());
+            for (const auto moved : right.children) { SetParent(moved, page_id); }
+            RebuildInternalKeys(node);
+        }
+        WriteNode(page_id, node);
+        parent.children.erase(parent.children.begin() + 1);
+        RebuildInternalKeys(parent);
+        DeleteNode(right_page_id);
+    }
+    RebalanceAfterDelete(parent_page_id, std::move(parent));
 }
 
 void BPlusTree::SetParent(page_id_t page_id, page_id_t parent_page_id) {
@@ -401,9 +594,16 @@ void BPlusTree::Validate() const {
             if (page_id != root_page_id_ && node.keys.empty()) {
                 throw std::runtime_error("Non-root B+ tree leaf is empty");
             }
+            if (page_id != root_page_id_ &&
+                node.keys.size() < (options_.leaf_max_size + 1) / 2) {
+                throw std::runtime_error("B+ tree leaf is underfull");
+            }
             leaves.emplace_back(page_id, node.next_leaf);
             if (node.keys.empty()) { return Info{0, 0, false, 1}; }
             return Info{node.keys.front(), node.keys.back(), true, 1};
+        }
+        if (page_id != root_page_id_ && node.keys.size() < options_.internal_max_size / 2) {
+            throw std::runtime_error("B+ tree internal node is underfull");
         }
         std::vector<Info> children;
         children.reserve(node.children.size());
@@ -422,6 +622,9 @@ void BPlusTree::Validate() const {
         return Info{children.front().minimum, children.back().maximum, true, children.front().height + 1};
     };
     visit(root_page_id_, -1);
+    if (header_page_id_ >= 0 && ReadHeader(pool_, header_page_id_) != root_page_id_) {
+        throw std::runtime_error("B+ tree header root is stale");
+    }
     for (std::size_t i = 0; i < leaves.size(); ++i) {
         const auto expected = i + 1 < leaves.size() ? leaves[i + 1].first : -1;
         if (leaves[i].second != expected) { throw std::runtime_error("B+ tree leaf chain is broken"); }

@@ -1,5 +1,7 @@
 #include "udb/sql/executor.h"
 
+#include <map>
+
 namespace udb::sql {
 namespace {
 
@@ -52,6 +54,22 @@ void CheckExpression(const BoundExpressionPtr& expression, const Schema& source)
     CheckExpression(logical.right, source);
 }
 
+std::optional<std::int64_t> GetIndexKey(const Value& value) {
+    if (value.IsNull()) { return std::nullopt; }
+    if (value.GetType() == TypeId::INTEGER) {
+        return static_cast<std::int64_t>(value.GetInteger());
+    }
+    if (value.GetType() == TypeId::BIGINT) { return value.GetBigInt(); }
+    throw std::logic_error("Index column has an unsupported type");
+}
+
+struct IndexChange {
+    index_id_t index_id;
+    RID rid;
+    std::optional<std::int64_t> old_key;
+    std::optional<std::int64_t> new_key;
+};
+
 }  // namespace
 
 ExecutionResult Executor::Execute(const PlanNode& plan) {
@@ -79,8 +97,23 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             CheckSchema(insert.GetTableSchema(), schema);
             const Tuple tuple(schema, insert.GetValues());
             const auto record = tuple.Serialize(schema);
+            std::vector<std::pair<index_id_t, std::int64_t>> index_keys;
+            for (const auto index_id : catalog_.GetTableIndexes(insert.GetTableId())) {
+                const auto& index = catalog_.GetIndex(index_id);
+                const auto key = GetIndexKey(tuple.GetValue(index.GetMetadata().GetColumnIndex()));
+                if (!key) { continue; }
+                if (index.GetTree().GetValue(*key)) {
+                    throw std::invalid_argument("Unique index key already exists");
+                }
+                index_keys.emplace_back(index_id, *key);
+            }
             ExecutionResult result{PlanType::Insert};
             result.inserted_rid = catalog_.GetTableHeap(insert.GetTableId()).InsertRecord(record);
+            for (const auto& [index_id, key] : index_keys) {
+                if (!catalog_.GetIndex(index_id).GetTree().Insert(key, *result.inserted_rid)) {
+                    throw std::runtime_error("Index changed after INSERT uniqueness check");
+                }
+            }
             result.affected_rows = 1;
             return result;
         }
@@ -131,20 +164,41 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             }
             CheckExpression(predicate, source);
             auto& heap = catalog_.GetTableHeap(deletion.GetTableId());
-            std::vector<RID> matches;
+            struct DeleteMatch {
+                RID rid;
+                std::vector<std::pair<index_id_t, std::int64_t>> keys;
+            };
+            std::vector<DeleteMatch> matches;
+            const auto table_indexes = catalog_.GetTableIndexes(deletion.GetTableId());
             for (auto rid = heap.GetFirstRID(); rid; rid = heap.GetNextRID(*rid)) {
                 bool remove = !predicate;
+                std::optional<Tuple> tuple;
                 if (predicate) {
-                    const auto tuple = Tuple::Deserialize(heap.GetRecord(*rid), source);
-                    const auto value = EvaluateExpression(*predicate, tuple);
+                    tuple = Tuple::Deserialize(heap.GetRecord(*rid), source);
+                    const auto value = EvaluateExpression(*predicate, *tuple);
                     if (value.GetType() != TypeId::BOOLEAN) {
                         throw std::invalid_argument("Predicate did not evaluate to BOOLEAN");
                     }
                     remove = !value.IsNull() && value.GetBoolean();
                 }
-                if (remove) { matches.push_back(*rid); }
+                if (!remove) { continue; }
+                if (!tuple) { tuple = Tuple::Deserialize(heap.GetRecord(*rid), source); }
+                DeleteMatch match{*rid, {}};
+                for (const auto index_id : table_indexes) {
+                    const auto& index = catalog_.GetIndex(index_id);
+                    const auto key = GetIndexKey(tuple->GetValue(index.GetMetadata().GetColumnIndex()));
+                    if (key) { match.keys.emplace_back(index_id, *key); }
+                }
+                matches.push_back(std::move(match));
             }
-            for (const auto rid : matches) { heap.DeleteRecord(rid); }
+            for (const auto& match : matches) {
+                for (const auto& [index_id, key] : match.keys) {
+                    if (!catalog_.GetIndex(index_id).GetTree().Remove(key)) {
+                        throw std::runtime_error("Index is missing key for deleted tuple");
+                    }
+                }
+                heap.DeleteRecord(match.rid);
+            }
             ExecutionResult result{PlanType::Delete};
             result.affected_rows = matches.size();
             return result;
@@ -175,7 +229,13 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             }
             CheckExpression(predicate, source);
             auto& heap = catalog_.GetTableHeap(update.GetTableId());
-            std::vector<std::pair<RID, Record>> replacements;
+            struct Replacement {
+                RID rid;
+                Record record;
+                std::vector<IndexChange> index_changes;
+            };
+            std::vector<Replacement> replacements;
+            const auto table_indexes = catalog_.GetTableIndexes(update.GetTableId());
             for (auto rid = heap.GetFirstRID(); rid; rid = heap.GetNextRID(*rid)) {
                 const auto tuple = Tuple::Deserialize(heap.GetRecord(*rid), source);
                 bool match = !predicate;
@@ -193,12 +253,49 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
                 for (const auto& assignment : update.GetAssignments()) {
                     values[assignment.column_index] = assignment.value;
                 }
-                replacements.emplace_back(*rid, Tuple(source, std::move(values)).Serialize(source));
+                const Tuple replacement(source, std::move(values));
+                Replacement pending{*rid, replacement.Serialize(source), {}};
+                for (const auto index_id : table_indexes) {
+                    const auto& index = catalog_.GetIndex(index_id);
+                    const auto column_index = index.GetMetadata().GetColumnIndex();
+                    if (!assigned[column_index]) { continue; }
+                    const auto old_key = GetIndexKey(tuple.GetValue(column_index));
+                    const auto new_key = GetIndexKey(replacement.GetValue(column_index));
+                    if (old_key != new_key) {
+                        pending.index_changes.push_back(IndexChange{index_id, *rid, old_key, new_key});
+                    }
+                }
+                replacements.push_back(std::move(pending));
+            }
+
+            std::map<index_id_t, std::map<std::int64_t, RID>> proposed_keys;
+            for (const auto& replacement : replacements) {
+                for (const auto& change : replacement.index_changes) {
+                    if (!change.new_key) { continue; }
+                    const auto [position, inserted] =
+                        proposed_keys[change.index_id].emplace(*change.new_key, change.rid);
+                    if (!inserted && position->second != change.rid) {
+                        throw std::invalid_argument("UPDATE creates duplicate unique index keys");
+                    }
+                    const auto existing = catalog_.GetIndex(change.index_id).GetTree().GetValue(*change.new_key);
+                    if (existing && *existing != change.rid) {
+                        throw std::invalid_argument("Unique index key already exists");
+                    }
+                }
             }
             std::size_t affected = 0;
             for (const auto& replacement : replacements) {
-                if (!heap.UpdateRecord(replacement.first, replacement.second)) {
+                if (!heap.UpdateRecord(replacement.rid, replacement.record)) {
                     throw std::runtime_error("Updated record does not fit in its current page");
+                }
+                for (const auto& change : replacement.index_changes) {
+                    auto& tree = catalog_.GetIndex(change.index_id).GetTree();
+                    if (change.old_key && !tree.Remove(*change.old_key)) {
+                        throw std::runtime_error("Index is missing old key for updated tuple");
+                    }
+                    if (change.new_key && !tree.Insert(*change.new_key, change.rid)) {
+                        throw std::runtime_error("Index changed after UPDATE uniqueness check");
+                    }
                 }
                 ++affected;
             }
