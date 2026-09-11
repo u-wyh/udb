@@ -30,6 +30,18 @@ std::optional<AggregateType> AggregateFunction(std::string name) {
     return std::nullopt;
 }
 
+std::string AggregateText(AggregateType type, const std::optional<std::string>& column) {
+    const char* name = nullptr;
+    switch (type) {
+        case AggregateType::Count: name = "count"; break;
+        case AggregateType::Sum: name = "sum"; break;
+        case AggregateType::Min: name = "min"; break;
+        case AggregateType::Max: name = "max"; break;
+        case AggregateType::Avg: name = "avg"; break;
+    }
+    return std::string(name) + "(" + (column ? *column : "*") + ")";
+}
+
 }  // namespace
 
 Token Parser::Take(TokenType type, const char* expected) {
@@ -181,6 +193,7 @@ SelectStatement Parser::Select() {
         Take(TokenType::By, "BY");
         statement.group_by = Take(TokenType::Identifier, "group column").text;
     }
+    if (Match(TokenType::Having)) { statement.having = ParseExpression(); }
     if (Match(TokenType::Order)) {
         Take(TokenType::By, "BY");
         do {
@@ -281,7 +294,20 @@ ExpressionPtr Parser::ParsePrimary() {
         return expression;
     }
     if (current_.type == TokenType::Identifier) {
-        return std::make_shared<Expression>(ColumnExpression{Take(TokenType::Identifier, "column").text});
+        const auto token = Take(TokenType::Identifier, "column");
+        if (!Match(TokenType::LeftParen)) {
+            return std::make_shared<Expression>(ColumnExpression{token.text});
+        }
+        const auto function = AggregateFunction(token.text);
+        if (!function) { throw SqlError("Unknown aggregate function", token.position); }
+        std::optional<std::string> column;
+        if (*function == AggregateType::Count && Match(TokenType::Star)) {
+            // COUNT(*) refers to the corresponding aggregate output.
+        } else {
+            column = Take(TokenType::Identifier, "aggregate column").text;
+        }
+        Take(TokenType::RightParen, ")");
+        return std::make_shared<Expression>(ColumnExpression{AggregateText(*function, column)});
     }
     if (current_.type == TokenType::IntegerLiteral || current_.type == TokenType::StringLiteral ||
         current_.type == TokenType::True || current_.type == TokenType::False || current_.type == TokenType::Null) {

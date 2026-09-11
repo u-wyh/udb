@@ -316,6 +316,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
                 throw std::invalid_argument("Invalid aggregate plan");
             }
             CheckExpression(aggregate.GetPredicate(), source);
+            CheckExpression(aggregate.GetHaving(), output);
             struct AggregateState {
                 explicit AggregateState(std::size_t size)
                     : values(size), counts(size, 0), sums(size, 0), average_sums(size, 0) {}
@@ -381,9 +382,8 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             }
             ExecutionResult result{PlanType::Aggregate};
             result.output_schema = output;
+            std::size_t matched_groups = 0;
             for (std::size_t position = 0; position < states.size(); ++position) {
-                if (position < aggregate.GetOffset()) { continue; }
-                if (ReachedLimit(aggregate.GetLimit(), result.rows.size())) { break; }
                 const auto& state = states[position];
                 std::vector<Value> row;
                 row.reserve(output.GetColumnCount());
@@ -407,10 +407,14 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
                         case AggregateType::Min:
                         case AggregateType::Max:
                             row.push_back(state.values[i].value_or(Value::Null(specs[i].input_type)));
-                            break;
+                        break;
                     }
                 }
-                result.rows.emplace_back(output, std::move(row));
+                Tuple tuple(output, std::move(row));
+                if (!Matches(aggregate.GetHaving(), tuple)) { continue; }
+                if (matched_groups++ < aggregate.GetOffset()) { continue; }
+                if (ReachedLimit(aggregate.GetLimit(), result.rows.size())) { break; }
+                result.rows.push_back(std::move(tuple));
             }
             return result;
         }

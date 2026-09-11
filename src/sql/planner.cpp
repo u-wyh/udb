@@ -151,7 +151,7 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement) {
         }
         return std::make_unique<AggregatePlan>(statement.table_id, std::move(aggregates),
             statement.output_schema, statement.predicate, statement.limit, statement.offset,
-            statement.group_by_column, statement.project_group_by);
+            statement.group_by_column, statement.project_group_by, statement.having);
     }
     std::vector<PlanOrderBy> order_by;
     for (const auto& order : statement.order_by) {

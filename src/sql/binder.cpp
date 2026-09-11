@@ -73,6 +73,7 @@ Value BindExpressionLiteral(const Literal& literal, std::optional<TypeId> expect
         const auto type = expected.value_or(small ? TypeId::INTEGER : TypeId::BIGINT);
         if (type == TypeId::INTEGER && small) { return Value::Integer(static_cast<std::int32_t>(*integer)); }
         if (type == TypeId::BIGINT) { return Value::BigInt(*integer); }
+        if (type == TypeId::DOUBLE) { return Value::Double(static_cast<double>(*integer)); }
         throw BindError("Integer literal type mismatch or out of range");
     }
     if (const auto* text = std::get_if<std::string>(&literal)) {
@@ -262,10 +263,14 @@ BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) con
                                         output_type, output_type == TypeId::VARCHAR ? max_length : 0);
             aggregates.push_back({aggregate.type, column_index, input_type});
         }
-        return {table.GetTableId(), table.GetTableName(), {}, Schema(std::move(output_columns)),
+        Schema output_schema(std::move(output_columns));
+        auto having = statement.having
+            ? BindExpression(statement.having, output_schema, TypeId::BOOLEAN) : nullptr;
+        return {table.GetTableId(), table.GetTableName(), {}, std::move(output_schema),
                 std::move(predicate), {}, statement.limit, statement.offset,
-                std::move(aggregates), group_by_column, project_group_by};
+                std::move(aggregates), group_by_column, project_group_by, std::move(having)};
     }
+    if (statement.having) { throw BindError("HAVING requires aggregate projections"); }
     if (statement.group_by) { throw BindError("GROUP BY requires aggregate projections"); }
     std::vector<std::size_t> indexes;
     if (statement.select_all) {
@@ -291,7 +296,7 @@ BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) con
     }
     return {table.GetTableId(), table.GetTableName(), std::move(indexes),
             Schema(std::move(columns)), std::move(predicate), std::move(order_by),
-            statement.limit, statement.offset, {}, std::nullopt, false};
+            statement.limit, statement.offset, {}, std::nullopt, false, nullptr};
 }
 
 BoundDeleteStatement Binder::BindStatement(const DeleteStatement& statement) const {

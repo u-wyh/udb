@@ -90,6 +90,7 @@ struct SelectStatement {
     std::size_t offset = 0;
     std::vector<AggregateExpression> aggregates;
     std::optional<std::string> group_by;
+    ExpressionPtr having = nullptr;
 };
 
 struct DeleteStatement {

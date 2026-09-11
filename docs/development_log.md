@@ -248,3 +248,11 @@
 - 测试结果：全新构建无编译警告，29 / 29 测试及 ASan / UBSan 通过，覆盖聚合、NULL、过滤、空表、分页和重开，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 30：HAVING。
+
+## 阶段 30：HAVING
+
+- 做了什么：为全局与分组聚合增加 HAVING，支持比较、AND / OR / NOT 和三值逻辑。
+- 关键设计：HAVING 只绑定 SELECT 已输出的分组键与聚合项；在聚合后过滤，在 LIMIT / OFFSET 前执行。
+- 测试结果：全新构建无编译警告，30 / 30 测试及 ASan / UBSan 通过，覆盖全局/分组聚合、DOUBLE、NULL、分页和重开，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 31：SELECT 表达式与别名。
