@@ -24,7 +24,7 @@ target_link_libraries(udb_binder PUBLIC udb_sql udb_catalog)
 add_library(udb_planner src/sql/planner.cpp)
 target_include_directories(udb_planner PUBLIC include)
 
-add_library(udb_executor src/sql/executor.cpp)
+add_library(udb_executor src/sql/executor.cpp src/sql/expression.cpp)
 target_link_libraries(udb_executor PUBLIC udb_catalog udb_planner)
 
 add_library(udb_sql_engine src/sql/engine.cpp)
@@ -82,8 +82,12 @@ add_executable(udb_sql_engine_test tests/sql_engine_test.cpp)
 target_link_libraries(udb_sql_engine_test PRIVATE udb_sql_engine)
 add_test(NAME sql_engine COMMAND udb_sql_engine_test)
 
+add_executable(udb_expression_test tests/expression_test.cpp)
+target_link_libraries(udb_expression_test PRIVATE udb_sql_engine)
+add_test(NAME expression COMMAND udb_expression_test)
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    foreach(target udb udb_storage udb_storage_test udb_buffer_pool_test udb_slotted_page_test udb_table_heap_test udb_types udb_tuple_test udb_catalog udb_catalog_test udb_database_test udb_sql udb_sql_test udb_binder udb_binder_test udb_planner udb_planner_test udb_executor udb_executor_test udb_sql_engine udb_sql_engine_test)
+    foreach(target udb udb_storage udb_storage_test udb_buffer_pool_test udb_slotted_page_test udb_table_heap_test udb_types udb_tuple_test udb_catalog udb_catalog_test udb_database_test udb_sql udb_sql_test udb_binder udb_binder_test udb_planner udb_planner_test udb_executor udb_executor_test udb_sql_engine udb_sql_engine_test udb_expression_test)
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
     endforeach()
 endif()

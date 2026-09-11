@@ -12,7 +12,8 @@ std::unique_ptr<PlanNode> Build(const BoundInsertStatement& statement) {
 }
 
 std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement) {
-    return std::make_unique<SeqScanPlan>(statement.table_id, statement.column_indexes, statement.output_schema);
+    return std::make_unique<SeqScanPlan>(statement.table_id, statement.column_indexes,
+                                         statement.output_schema, statement.predicate);
 }
 
 }  // namespace

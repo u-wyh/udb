@@ -26,7 +26,9 @@ private:
 enum class TokenType {
     End, Identifier, IntegerLiteral, StringLiteral,
     LeftParen, RightParen, Comma, Semicolon, Star,
-    Create, Table, Insert, Into, Values, Select, From,
+    Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
+    Create, Table, Insert, Into, Values, Select, From, Where,
+    And, Or, Not,
     Integer, BigInt, Boolean, Varchar, True, False, Null
 };
 

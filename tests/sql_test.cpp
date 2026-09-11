@@ -113,7 +113,7 @@ void TestSelectAndErrors() {
     const auto multi = std::get<SelectStatement>(Parser::Parse("SELECT id, Name FROM t;"));
     Check(!multi.select_all && multi.column_names == std::vector<std::string>({"id", "Name"}), "Projection order/spelling lost");
     for (const auto input : {"", " ", ";", "SELECT * t", "SELECT * FROM", "SELECT FROM t", "SELECT id, FROM t",
-         "SELECT *, id FROM t", "SELECT id, * FROM t", "SELECT * FROM t WHERE id", "SELECT * FROM t JOIN u",
+         "SELECT *, id FROM t", "SELECT id, * FROM t", "SELECT * FROM t WHERE", "SELECT * FROM t JOIN u",
          "SELECT * FROM t GROUP BY id", "SELECT * FROM t ORDER BY id", "SELECT * FROM t LIMIT 1", "SELECT count(*) FROM t",
          "SELECT * FROM t;;", "SELECT * FROM t; SELECT * FROM u", "UPDATE t", "DELETE FROM t", "DROP TABLE t", "ALTER TABLE t"}) {
         Reject([&] { Parser::Parse(input); });

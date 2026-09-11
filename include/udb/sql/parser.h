@@ -19,6 +19,12 @@ private:
     InsertStatement Insert();
     SelectStatement Select();
     Literal ParseLiteral();
+    ExpressionPtr ParseExpression();
+    ExpressionPtr ParseOr();
+    ExpressionPtr ParseAnd();
+    ExpressionPtr ParseNot();
+    ExpressionPtr ParseComparison();
+    ExpressionPtr ParsePrimary();
 
     Lexer lexer_;
     Token current_;

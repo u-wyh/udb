@@ -1,6 +1,7 @@
 #pragma once
 
 #include "udb/table_metadata.h"
+#include "udb/sql/bound_expression.h"
 #include "udb/value.h"
 
 #include <variant>
@@ -25,6 +26,7 @@ struct BoundSelectStatement {
     std::string table_name;
     std::vector<std::size_t> column_indexes;
     Schema output_schema;
+    BoundExpressionPtr predicate = nullptr;
 };
 
 using BoundStatement = std::variant<BoundCreateTableStatement, BoundInsertStatement, BoundSelectStatement>;

@@ -12,7 +12,8 @@ bool Space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c
 const std::unordered_map<std::string, TokenType> kKeywords = {
     {"CREATE", TokenType::Create}, {"TABLE", TokenType::Table},
     {"INSERT", TokenType::Insert}, {"INTO", TokenType::Into}, {"VALUES", TokenType::Values},
-    {"SELECT", TokenType::Select}, {"FROM", TokenType::From},
+    {"SELECT", TokenType::Select}, {"FROM", TokenType::From}, {"WHERE", TokenType::Where},
+    {"AND", TokenType::And}, {"OR", TokenType::Or}, {"NOT", TokenType::Not},
     {"INTEGER", TokenType::Integer}, {"BIGINT", TokenType::BigInt},
     {"BOOLEAN", TokenType::Boolean}, {"VARCHAR", TokenType::Varchar},
     {"TRUE", TokenType::True}, {"FALSE", TokenType::False}, {"NULL", TokenType::Null}
@@ -78,6 +79,25 @@ Token Lexer::Next() {
         case ',': return {TokenType::Comma, ",", start};
         case ';': return {TokenType::Semicolon, ";", start};
         case '*': return {TokenType::Star, "*", start};
+        case '=': return {TokenType::Equal, "=", start};
+        case '!':
+            if (position_.offset < input_.size() && input_[position_.offset] == '=') {
+                Advance();
+                return {TokenType::NotEqual, "!=", start};
+            }
+            throw SqlError("Expected = after !", start);
+        case '<':
+            if (position_.offset < input_.size() && input_[position_.offset] == '=') {
+                Advance();
+                return {TokenType::LessEqual, "<=", start};
+            }
+            return {TokenType::Less, "<", start};
+        case '>':
+            if (position_.offset < input_.size() && input_[position_.offset] == '=') {
+                Advance();
+                return {TokenType::GreaterEqual, ">=", start};
+            }
+            return {TokenType::Greater, ">", start};
         default: throw SqlError("Illegal character", start);
     }
 }

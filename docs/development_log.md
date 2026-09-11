@@ -101,3 +101,11 @@
 - 测试结果：从零构建无警告，全部 12 个测试及 ASan/UBSan 通过，覆盖错误传播、多页查询和重开执行，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：WHERE 与表达式系统。
+
+## 阶段 13：Expression + WHERE
+
+- 做了什么：实现 AST / Bound Expression、比较与逻辑运算，并为 SELECT 加入 WHERE 过滤。
+- 关键设计：Bound 列引用只保存列下标；SeqScanPlan 携带可选 predicate；比较和 AND / OR / NOT 遵循 SQL 三值逻辑。
+- 测试结果：从零构建无警告，全部 13 个测试及 ASan/UBSan 通过，覆盖优先级、类型绑定、多页过滤和重开查询，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：DELETE。

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "udb/table_metadata.h"
+#include "udb/sql/bound_expression.h"
 #include "udb/value.h"
 
 #include <memory>
@@ -55,14 +56,18 @@ private:
 
 class SeqScanPlan final : public PlanNode {
 public:
-    SeqScanPlan(table_id_t id, std::vector<std::size_t> indexes, Schema output_schema)
-        : PlanNode(PlanType::SeqScan, std::move(output_schema)), table_id_(id), indexes_(std::move(indexes)) {}
+    SeqScanPlan(table_id_t id, std::vector<std::size_t> indexes, Schema output_schema,
+                BoundExpressionPtr predicate = nullptr)
+        : PlanNode(PlanType::SeqScan, std::move(output_schema)), table_id_(id),
+          indexes_(std::move(indexes)), predicate_(std::move(predicate)) {}
     table_id_t GetTableId() const { return table_id_; }
     const std::vector<std::size_t>& GetColumnIndexes() const { return indexes_; }
+    const BoundExpressionPtr& GetPredicate() const { return predicate_; }
 
 private:
     table_id_t table_id_;
     std::vector<std::size_t> indexes_;
+    BoundExpressionPtr predicate_;
 };
 
 }  // namespace udb::sql

@@ -110,7 +110,62 @@ SelectStatement Parser::Select() {
     }
     Take(TokenType::From, "FROM");
     statement.table_name = Take(TokenType::Identifier, "table name").text;
+    if (Match(TokenType::Where)) { statement.predicate = ParseExpression(); }
     return statement;
+}
+
+ExpressionPtr Parser::ParseExpression() { return ParseOr(); }
+
+ExpressionPtr Parser::ParseOr() {
+    auto left = ParseAnd();
+    while (Match(TokenType::Or)) {
+        left = std::make_shared<Expression>(LogicalExpression{LogicalOperator::Or, left, ParseAnd()});
+    }
+    return left;
+}
+
+ExpressionPtr Parser::ParseAnd() {
+    auto left = ParseNot();
+    while (Match(TokenType::And)) {
+        left = std::make_shared<Expression>(LogicalExpression{LogicalOperator::And, left, ParseNot()});
+    }
+    return left;
+}
+
+ExpressionPtr Parser::ParseNot() {
+    if (Match(TokenType::Not)) {
+        return std::make_shared<Expression>(LogicalExpression{LogicalOperator::Not, ParseNot(), nullptr});
+    }
+    return ParseComparison();
+}
+
+ExpressionPtr Parser::ParseComparison() {
+    auto left = ParsePrimary();
+    ComparisonOperator op;
+    if (Match(TokenType::Equal)) { op = ComparisonOperator::Equal; }
+    else if (Match(TokenType::NotEqual)) { op = ComparisonOperator::NotEqual; }
+    else if (Match(TokenType::Less)) { op = ComparisonOperator::Less; }
+    else if (Match(TokenType::LessEqual)) { op = ComparisonOperator::LessEqual; }
+    else if (Match(TokenType::Greater)) { op = ComparisonOperator::Greater; }
+    else if (Match(TokenType::GreaterEqual)) { op = ComparisonOperator::GreaterEqual; }
+    else { return left; }
+    return std::make_shared<Expression>(ComparisonExpression{op, left, ParsePrimary()});
+}
+
+ExpressionPtr Parser::ParsePrimary() {
+    if (Match(TokenType::LeftParen)) {
+        auto expression = ParseExpression();
+        Take(TokenType::RightParen, ")");
+        return expression;
+    }
+    if (current_.type == TokenType::Identifier) {
+        return std::make_shared<Expression>(ColumnExpression{Take(TokenType::Identifier, "column").text});
+    }
+    if (current_.type == TokenType::IntegerLiteral || current_.type == TokenType::StringLiteral ||
+        current_.type == TokenType::True || current_.type == TokenType::False || current_.type == TokenType::Null) {
+        return std::make_shared<Expression>(LiteralExpression{ParseLiteral()});
+    }
+    throw SqlError("Expected expression", current_.position);
 }
 
 }  // namespace udb::sql
