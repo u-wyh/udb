@@ -1,0 +1,31 @@
+#pragma once
+
+#include "udb/catalog.h"
+#include "udb/sql/plan.h"
+#include "udb/tuple.h"
+
+namespace udb::sql {
+
+// A returned result denotes success; errors propagate as exceptions.
+// CREATE/INSERT have empty output schemas and rows. INSERT affects one row.
+struct ExecutionResult {
+    explicit ExecutionResult(PlanType plan_type) : type(plan_type) {}
+    PlanType type;
+    std::size_t affected_rows = 0;
+    Schema output_schema{std::vector<Column>{}};
+    std::vector<Tuple> rows;
+    std::optional<RID> inserted_rid;
+};
+
+// Catalog must outlive this executor. Execute consumes already planned inputs;
+// no parsing, binding, or automatic flush. SELECT materializes all output rows.
+class Executor {
+public:
+    explicit Executor(Catalog& catalog) : catalog_(catalog) {}
+    ExecutionResult Execute(const PlanNode& plan);
+
+private:
+    Catalog& catalog_;
+};
+
+}  // namespace udb::sql

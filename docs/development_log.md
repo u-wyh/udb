@@ -85,3 +85,11 @@
 - 测试结果：从零构建及检测版重编译无警告，全部 10 个测试及 ASan/UBSan 通过，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：Executor。
+
+## 阶段 11：Executor
+
+- 做了什么：实现 CREATE TABLE、INSERT 与顺序扫描执行，返回执行结果和投影后的 Tuple。
+- 关键设计：直接使用 Plan 中的表 ID 和列下标；通过 Catalog / TableHeap 访问数据；保持 Database 显式 Flush / Close 语义。
+- 测试结果：从零构建无警告，全部 11 个测试及 ASan/UBSan 通过，覆盖完整 SQL 链路、多页扫描和重开恢复，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：SQL Engine / Database 对外执行接口。
