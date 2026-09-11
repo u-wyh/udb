@@ -35,7 +35,12 @@ Statement Parser::Parse(std::string_view input) {
     Parser parser(input);
     Statement statement;
     switch (parser.current_.type) {
-        case TokenType::Create: statement = parser.CreateTable(); break;
+        case TokenType::Create:
+            parser.Take(TokenType::Create, "CREATE");
+            if (parser.current_.type == TokenType::Table) { statement = parser.CreateTable(); }
+            else if (parser.current_.type == TokenType::Index) { statement = parser.CreateIndex(); }
+            else { throw SqlError("Expected TABLE or INDEX", parser.current_.position); }
+            break;
         case TokenType::Drop: statement = parser.DropTable(); break;
         case TokenType::Insert: statement = parser.Insert(); break;
         case TokenType::Select: statement = parser.Select(); break;
@@ -49,7 +54,6 @@ Statement Parser::Parse(std::string_view input) {
 }
 
 CreateTableStatement Parser::CreateTable() {
-    Take(TokenType::Create, "CREATE");
     Take(TokenType::Table, "TABLE");
     CreateTableStatement statement;
     statement.table_name = Take(TokenType::Identifier, "table name").text;
@@ -75,6 +79,18 @@ CreateTableStatement Parser::CreateTable() {
         }
         statement.columns.push_back(std::move(column));
     } while (Match(TokenType::Comma));
+    Take(TokenType::RightParen, ")");
+    return statement;
+}
+
+CreateIndexStatement Parser::CreateIndex() {
+    Take(TokenType::Index, "INDEX");
+    CreateIndexStatement statement;
+    statement.index_name = Take(TokenType::Identifier, "index name").text;
+    Take(TokenType::On, "ON");
+    statement.table_name = Take(TokenType::Identifier, "table name").text;
+    Take(TokenType::LeftParen, "(");
+    statement.column_name = Take(TokenType::Identifier, "column name").text;
     Take(TokenType::RightParen, ")");
     return statement;
 }

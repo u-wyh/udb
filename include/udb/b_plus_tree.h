@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <memory>
 #include <vector>
 
 namespace udb {
@@ -29,8 +30,15 @@ public:
     explicit BPlusTree(BufferPoolManager& pool, BPlusTreeOptions options = {});
     BPlusTree(BufferPoolManager& pool, page_id_t root_page_id,
               BPlusTreeOptions options = {});
+    // Header-backed trees keep a stable on-disk identity while root splits.
+    static std::unique_ptr<BPlusTree> CreateWithHeader(
+        BufferPoolManager& pool, BPlusTreeOptions options = {});
+    static std::unique_ptr<BPlusTree> OpenWithHeader(
+        BufferPoolManager& pool, page_id_t header_page_id,
+        BPlusTreeOptions options = {});
 
     page_id_t GetRootPageId() const { return root_page_id_; }
+    page_id_t GetHeaderPageId() const { return header_page_id_; }
     std::optional<RID> GetValue(std::int64_t key) const;
     // Duplicate keys return false without changing the tree.
     bool Insert(std::int64_t key, RID rid);
@@ -52,9 +60,13 @@ private:
     void SetParent(page_id_t page_id, page_id_t parent_page_id);
     void InsertIntoParent(page_id_t left_page_id, std::int64_t separator,
                           page_id_t right_page_id, std::vector<page_id_t> path);
+    page_id_t NewHeaderPage();
+    void WriteHeader();
+    static page_id_t ReadHeader(BufferPoolManager& pool, page_id_t header_page_id);
 
     BufferPoolManager& pool_;
     page_id_t root_page_id_ = -1;
+    page_id_t header_page_id_ = -1;
     BPlusTreeOptions options_;
 };
 

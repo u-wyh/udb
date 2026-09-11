@@ -153,3 +153,12 @@
 - 当前限制：仅支持 int64_t key，不支持删除。
 - Commit：见 Git 历史
 - 下一步：B+ Tree Delete / Merge / Redistribution。
+
+## 阶段 19：Index Metadata + CREATE INDEX
+
+- 做了什么：实现 Catalog 持久化 IndexMetadata 和 CREATE INDEX 全链路，并从现有 TableHeap 数据构建索引。
+- 关键设计：索引以稳定 B+ Tree header_page_id 标识；CREATE INDEX 先完整构建、后注册；INTEGER / BIGINT 统一为 int64_t key，跳过 NULL，当前仅支持单列唯一索引；metadata v3 兼容 v1 / v2。
+- 测试结果：从零构建无警告，全部 19 个测试及 ASan / UBSan 通过，覆盖多层 split、重开、DROP 清理和损坏 metadata，git diff --check 通过。
+- 当前限制：INSERT / UPDATE / DELETE 尚不维护索引，SELECT 尚不使用索引；无 DROP INDEX、非唯一索引和 B+ Tree Delete；失败创建索引或 DROP TABLE 后索引页面暂不回收。
+- Commit：见 Git 历史
+- 下一步：阶段 20：DML Index Maintenance。

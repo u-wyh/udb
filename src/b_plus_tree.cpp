@@ -11,6 +11,8 @@ namespace udb {
 namespace {
 
 constexpr std::uint32_t kMagic = 0x31545042;  // "BPT1" in little-endian.
+constexpr std::uint64_t kHeaderMagic = 0x0031485042424455;  // "UDBBPH1\0".
+constexpr std::uint32_t kHeaderVersion = 1;
 constexpr std::uint8_t kLeaf = 1;
 constexpr std::uint8_t kInternal = 2;
 constexpr std::uint64_t kInvalidPage = std::numeric_limits<std::uint64_t>::max();
@@ -101,6 +103,22 @@ BPlusTree::BPlusTree(BufferPoolManager& pool, page_id_t root_page_id,
     ValidateOptions();
     if (root_page_id < 0) { throw std::invalid_argument("B+ tree root page ID must be nonnegative"); }
     Validate();
+}
+
+std::unique_ptr<BPlusTree> BPlusTree::CreateWithHeader(
+    BufferPoolManager& pool, BPlusTreeOptions options) {
+    auto tree = std::make_unique<BPlusTree>(pool, options);
+    tree->header_page_id_ = tree->NewHeaderPage();
+    return tree;
+}
+
+std::unique_ptr<BPlusTree> BPlusTree::OpenWithHeader(
+    BufferPoolManager& pool, page_id_t header_page_id, BPlusTreeOptions options) {
+    const auto root_page_id = ReadHeader(pool, header_page_id);
+    auto tree = std::make_unique<BPlusTree>(pool, root_page_id, options);
+    if (header_page_id == root_page_id) { throw std::runtime_error("B+ tree header aliases its root"); }
+    tree->header_page_id_ = header_page_id;
+    return tree;
 }
 
 void BPlusTree::ValidateOptions() const {
@@ -217,6 +235,41 @@ page_id_t BPlusTree::NewNode(const Node& node) {
     return page.GetPageId();
 }
 
+page_id_t BPlusTree::NewHeaderPage() {
+    PinnedPage page(pool_);
+    Page encoded;
+    Write(encoded, 0, 8, kHeaderMagic);
+    Write(encoded, 8, 4, kHeaderVersion);
+    Write(encoded, 16, 8, EncodePageId(root_page_id_));
+    page.GetPage() = encoded;
+    page.MarkDirty();
+    return page.GetPageId();
+}
+
+void BPlusTree::WriteHeader() {
+    if (header_page_id_ < 0) { return; }
+    Page encoded;
+    Write(encoded, 0, 8, kHeaderMagic);
+    Write(encoded, 8, 4, kHeaderVersion);
+    Write(encoded, 16, 8, EncodePageId(root_page_id_));
+    PinnedPage page(pool_, header_page_id_);
+    page.GetPage() = encoded;
+    page.MarkDirty();
+}
+
+page_id_t BPlusTree::ReadHeader(BufferPoolManager& pool, page_id_t header_page_id) {
+    if (header_page_id < 0) { throw std::invalid_argument("B+ tree header page ID must be nonnegative"); }
+    PinnedPage page(pool, header_page_id);
+    const auto& bytes = page.GetPage();
+    if (Read(bytes, 0, 8) != kHeaderMagic || Read(bytes, 8, 4) != kHeaderVersion ||
+        Read(bytes, 12, 4) != 0) {
+        throw std::runtime_error("Invalid B+ tree header page");
+    }
+    const auto root = DecodePageId(Read(bytes, 16, 8));
+    if (root < 0) { throw std::runtime_error("Invalid B+ tree root in header"); }
+    return root;
+}
+
 page_id_t BPlusTree::FindLeaf(std::int64_t key, std::vector<page_id_t>* path) const {
     std::unordered_set<page_id_t> seen;
     auto page_id = root_page_id_;
@@ -284,6 +337,7 @@ void BPlusTree::InsertIntoParent(page_id_t left_page_id, std::int64_t separator,
         SetParent(left_page_id, new_root);
         SetParent(right_page_id, new_root);
         root_page_id_ = new_root;
+        WriteHeader();
         return;
     }
 

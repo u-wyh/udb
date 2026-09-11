@@ -157,6 +157,26 @@ BoundCreateTableStatement Binder::BindStatement(const CreateTableStatement& stat
     return {statement.table_name, Schema(std::move(columns))};
 }
 
+BoundCreateIndexStatement Binder::BindStatement(const CreateIndexStatement& statement) const {
+    if (statement.index_name.empty()) { throw BindError("CREATE INDEX requires a name"); }
+    const auto& table = Lookup(statement.table_name);
+    const auto column_index = FindColumn(table.GetSchema(), statement.column_name);
+    const auto type = table.GetSchema().GetColumn(column_index).GetType();
+    if (type != TypeId::INTEGER && type != TypeId::BIGINT) {
+        throw BindError("Index column must be INTEGER or BIGINT");
+    }
+    for (const auto id : catalog_.ListIndexes()) {
+        const auto& metadata = catalog_.GetIndex(id).GetMetadata();
+        if (metadata.GetIndexName() == statement.index_name) {
+            throw BindError("Index already exists: " + statement.index_name);
+        }
+        if (metadata.GetTableId() == table.GetTableId() && metadata.GetColumnIndex() == column_index) {
+            throw BindError("Table column already has an index");
+        }
+    }
+    return {statement.index_name, table.GetTableId(), column_index};
+}
+
 BoundDropTableStatement Binder::BindStatement(const DropTableStatement& statement) const {
     const auto& table = Lookup(statement.table_name);
     return {table.GetTableId(), table.GetTableName()};

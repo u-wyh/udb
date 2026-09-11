@@ -11,6 +11,7 @@ bool Space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c
 
 const std::unordered_map<std::string, TokenType> kKeywords = {
     {"CREATE", TokenType::Create}, {"DROP", TokenType::Drop}, {"TABLE", TokenType::Table},
+    {"INDEX", TokenType::Index}, {"ON", TokenType::On},
     {"INSERT", TokenType::Insert}, {"INTO", TokenType::Into}, {"VALUES", TokenType::Values},
     {"SELECT", TokenType::Select}, {"DELETE", TokenType::Delete},
     {"UPDATE", TokenType::Update}, {"SET", TokenType::Set},

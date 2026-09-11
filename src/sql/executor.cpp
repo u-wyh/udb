@@ -62,6 +62,12 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             catalog_.CreateTable(create.GetTableName(), create.GetTableSchema());
             return result;
         }
+        case PlanType::CreateIndex: {
+            const auto& create = dynamic_cast<const CreateIndexPlan&>(plan);
+            catalog_.CreateIndex(create.GetIndexName(), create.GetTableId(),
+                                 create.GetColumnIndex());
+            return ExecutionResult{PlanType::CreateIndex};
+        }
         case PlanType::DropTable: {
             const auto& drop = dynamic_cast<const DropTablePlan&>(plan);
             catalog_.DropTable(drop.GetTableId());

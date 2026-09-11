@@ -20,6 +20,12 @@ struct CreateTableStatement {
     std::vector<ColumnDefinition> columns;
 };
 
+struct CreateIndexStatement {
+    std::string index_name;
+    std::string table_name;
+    std::string column_name;
+};
+
 struct DropTableStatement {
     std::string table_name;
 };
@@ -81,7 +87,7 @@ struct UpdateStatement {
     ExpressionPtr predicate = nullptr;
 };
 
-using Statement = std::variant<CreateTableStatement, DropTableStatement, InsertStatement,
+using Statement = std::variant<CreateTableStatement, CreateIndexStatement, DropTableStatement, InsertStatement,
                                SelectStatement, DeleteStatement, UpdateStatement>;
 
 }  // namespace udb::sql

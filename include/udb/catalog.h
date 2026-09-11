@@ -2,6 +2,7 @@
 
 #include "udb/table_heap.h"
 #include "udb/table_metadata.h"
+#include "udb/index_metadata.h"
 
 #include <map>
 #include <memory>
@@ -9,7 +10,7 @@
 namespace udb {
 
 // Single-threaded, memory-only. Pool must outlive the catalog. Returned
-// references stay valid until their table is dropped or catalog destruction;
+// references stay valid until their table/index is removed or catalog destruction;
 // no implicit flush or reload.
 class Catalog {
 public:
@@ -33,10 +34,24 @@ public:
     const TableHeap& GetTableHeap(const std::string& name) const;
     std::vector<table_id_t> ListTables() const;  // Ascending ID order; snapshot.
 
+    // Builds a unique single-column INTEGER/BIGINT index from existing rows,
+    // then registers it. NULL values are skipped; duplicate keys fail.
+    const Index& CreateIndex(const std::string& name, table_id_t table_id,
+                             std::size_t column_index,
+                             BPlusTreeOptions options = {});
+    const Index& GetIndex(index_id_t id) const;
+    const Index& GetIndex(const std::string& name) const;
+    Index& GetIndex(index_id_t id);
+    Index& GetIndex(const std::string& name);
+    std::vector<index_id_t> ListIndexes() const;
+    std::vector<index_id_t> GetTableIndexes(table_id_t table_id) const;
+
 private:
     friend class Database;
     void RestoreTable(const TableMetadata& metadata);
     void RestoreNextId(table_id_t next_id);
+    void RestoreIndex(const IndexMetadata& metadata);
+    void RestoreNextIndexId(index_id_t next_id);
     struct Entry {
         Entry(BufferPoolManager& pool, table_id_t id, const std::string& name, const Schema& schema)
             : heap(pool), metadata(id, name, schema, heap.GetFirstPageId()) {}
@@ -48,9 +63,11 @@ private:
 
     BufferPoolManager& pool_;
     table_id_t next_id_ = 0;
+    index_id_t next_index_id_ = 0;
     // One authoritative map avoids partially updated name/ID indexes.
     // Name lookup is a simple linear scan for this first catalog.
     std::map<table_id_t, std::unique_ptr<Entry>> tables_;
+    std::map<index_id_t, std::unique_ptr<Index>> indexes_;
 };
 
 }  // namespace udb

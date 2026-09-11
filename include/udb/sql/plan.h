@@ -8,7 +8,7 @@
 
 namespace udb::sql {
 
-enum class PlanType { CreateTable, DropTable, Insert, SeqScan, Delete, Update };
+enum class PlanType { CreateTable, CreateIndex, DropTable, Insert, SeqScan, Delete, Update };
 
 // Logical descriptions only. All current plans are leaves with no children.
 class PlanNode {
@@ -38,6 +38,21 @@ public:
 private:
     std::string table_name_;
     Schema schema_;
+};
+
+class CreateIndexPlan final : public PlanNode {
+public:
+    CreateIndexPlan(std::string name, table_id_t table_id, std::size_t column_index)
+        : PlanNode(PlanType::CreateIndex, Schema({})), index_name_(std::move(name)),
+          table_id_(table_id), column_index_(column_index) {}
+    const std::string& GetIndexName() const { return index_name_; }
+    table_id_t GetTableId() const { return table_id_; }
+    std::size_t GetColumnIndex() const { return column_index_; }
+
+private:
+    std::string index_name_;
+    table_id_t table_id_;
+    std::size_t column_index_;
 };
 
 class DropTablePlan final : public PlanNode {

@@ -6,13 +6,15 @@
 namespace udb {
 namespace {
 
-// v2: magic:u64, version:u32, table_count:u32, next_table_id:u64,
+// v3: magic:u64, version:u32, table_count:u32, next_table_id:u64,
 //     free_page_count:u64, then that many free_page_id:u64 values.
 // Table: id:u64, name:(u32 length + bytes), first_page:u64, column_count:u32.
 // Column: name:(u32 length + bytes), type:u8 (0..3), max_length:u32.
+// After tables: next_index_id:u64, index_count:u64, then Index entries:
+// id:u64, name:(u32 length + bytes), table_id:u64, column_index:u64, header_page_id:u64.
 // All integers are little-endian. No struct layouts or native string objects.
 constexpr std::uint64_t kMagic = 0x314154454d424455;  // "UDBMETA1"
-constexpr std::uint32_t kVersion = 2;
+constexpr std::uint32_t kVersion = 3;
 
 std::filesystem::path MetadataPath(const std::filesystem::path& path) {
     if (path.empty() || path.extension() != ".udb") {
@@ -186,6 +188,17 @@ void Database::SaveMetadata() const {
             Write(bytes, column.GetMaxLength(), 4);
         }
     }
+    const auto index_ids = catalog_->ListIndexes();
+    Write(bytes, catalog_->next_index_id_, 8);
+    Write(bytes, index_ids.size(), 8);
+    for (const auto id : index_ids) {
+        const auto& metadata = catalog_->GetIndex(id).GetMetadata();
+        Write(bytes, id, 8);
+        WriteString(bytes, metadata.GetIndexName());
+        Write(bytes, metadata.GetTableId(), 8);
+        Write(bytes, metadata.GetColumnIndex(), 8);
+        Write(bytes, static_cast<std::uint64_t>(metadata.GetHeaderPageId()), 8);
+    }
     if (bytes.size() > static_cast<std::uintmax_t>(std::numeric_limits<std::streamsize>::max())) {
         throw std::length_error("Metadata file is too large");
     }
@@ -210,11 +223,13 @@ void Database::LoadMetadata() {
     Reader reader(metadata_path_);
     if (reader.Read(8) != kMagic) { throw std::runtime_error("Invalid metadata magic"); }
     const auto version = reader.Read(4);
-    if (version != 1 && version != kVersion) { throw std::runtime_error("Unsupported metadata version"); }
+    if (version != 1 && version != 2 && version != kVersion) {
+        throw std::runtime_error("Unsupported metadata version");
+    }
     const auto count = reader.Read(4);
     const auto next_id = reader.Read(8);
     std::vector<page_id_t> free_pages;
-    if (version == kVersion) {
+    if (version >= 2) {
         const auto free_count = reader.Read(8);
         if (free_count > reader.Remaining() / 8) { throw std::runtime_error("Invalid metadata free page count"); }
         free_pages.reserve(static_cast<std::size_t>(free_count));
@@ -246,8 +261,28 @@ void Database::LoadMetadata() {
         }
         catalog_->RestoreTable(TableMetadata(id, name, Schema(std::move(columns)), static_cast<page_id_t>(first)));
     }
+    index_id_t next_index_id = 0;
+    if (version == kVersion) {
+        next_index_id = reader.Read(8);
+        const auto index_count = reader.Read(8);
+        if (index_count > reader.Remaining() / 36) { throw std::runtime_error("Invalid metadata index count"); }
+        for (std::uint64_t i = 0; i < index_count; ++i) {
+            const auto id = reader.Read(8);
+            const auto name = reader.String();
+            const auto table_id = reader.Read(8);
+            const auto column_index = reader.Read(8);
+            const auto header_page_id = reader.Read(8);
+            if (column_index > std::numeric_limits<std::size_t>::max() ||
+                header_page_id > static_cast<std::uint64_t>(std::numeric_limits<page_id_t>::max())) {
+                throw std::runtime_error("Invalid metadata index field");
+            }
+            catalog_->RestoreIndex(IndexMetadata(id, name, table_id,
+                static_cast<std::size_t>(column_index), static_cast<page_id_t>(header_page_id)));
+        }
+    }
     if (reader.Remaining() != 0) { throw std::runtime_error("Trailing bytes in metadata"); }
     catalog_->RestoreNextId(next_id);
+    catalog_->RestoreNextIndexId(next_index_id);
 }
 
 }  // namespace udb

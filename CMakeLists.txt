@@ -106,8 +106,12 @@ add_executable(udb_b_plus_tree_test tests/b_plus_tree_test.cpp)
 target_link_libraries(udb_b_plus_tree_test PRIVATE udb_storage)
 add_test(NAME b_plus_tree COMMAND udb_b_plus_tree_test)
 
+add_executable(udb_create_index_test tests/create_index_test.cpp)
+target_link_libraries(udb_create_index_test PRIVATE udb_sql_engine)
+add_test(NAME create_index COMMAND udb_create_index_test)
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    foreach(target udb udb_storage udb_storage_test udb_buffer_pool_test udb_slotted_page_test udb_table_heap_test udb_types udb_tuple_test udb_catalog udb_catalog_test udb_database_test udb_sql udb_sql_test udb_binder udb_binder_test udb_planner udb_planner_test udb_executor udb_executor_test udb_sql_engine udb_sql_engine_test udb_expression_test udb_delete_test udb_update_test udb_drop_table_test udb_free_page_test udb_b_plus_tree_test)
+    foreach(target udb udb_storage udb_storage_test udb_buffer_pool_test udb_slotted_page_test udb_table_heap_test udb_types udb_tuple_test udb_catalog udb_catalog_test udb_database_test udb_sql udb_sql_test udb_binder udb_binder_test udb_planner udb_planner_test udb_executor udb_executor_test udb_sql_engine udb_sql_engine_test udb_expression_test udb_delete_test udb_update_test udb_drop_table_test udb_free_page_test udb_b_plus_tree_test udb_create_index_test)
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
     endforeach()
 endif()
