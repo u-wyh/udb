@@ -144,3 +144,12 @@
 - 当前限制：释放 Page 会复用，但不会缩小 .udb 文件。
 - Commit：见 Git 历史
 - 下一步：B+ Tree 索引基础。
+
+## 阶段 18：B+ Tree 基础
+
+- 做了什么：实现持久化 int64_t 到 RID 的 B+ Tree，支持精确查询、插入及 Leaf/Internal/Root split。
+- 关键设计：节点采用固定宽度小端页面格式；Internal separator 表示右侧 child 的最小 key；所有页面通过 BufferPoolManager 和局部 pin guard 访问。
+- 测试结果：从零构建无警告，全部 18 个测试及 ASan/UBSan 通过，覆盖 4000 个乱序 key、小 Buffer Pool、多层 split、重开与继续插入，git diff --check 通过。
+- 当前限制：仅支持 int64_t key，不支持删除。
+- Commit：见 Git 历史
+- 下一步：B+ Tree Delete / Merge / Redistribution。
