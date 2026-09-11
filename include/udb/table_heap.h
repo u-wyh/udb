@@ -3,6 +3,8 @@
 #include "udb/buffer_pool_manager.h"
 #include "udb/slotted_page.h"
 
+#include <vector>
+
 namespace udb {
 
 // Single-threaded, non-owning BufferPoolManager reference. Caller saves the
@@ -25,10 +27,13 @@ public:
     std::optional<RID> GetFirstRID() const;
     // Current must be a live RID in this table; nullopt denotes end of scan.
     std::optional<RID> GetNextRID(RID current) const;
+    // Explicit DROP path. Validates and unpins the full chain, verifies that no
+    // page is pinned, then releases every page. Destruction alone never does this.
+    void DeletePages();
 
 private:
+    std::vector<page_id_t> CollectPageIds() const;
     void RequireMember(page_id_t page_id) const;
-    std::optional<RID> ScanFrom(page_id_t page_id) const;
 
     BufferPoolManager& pool_;
     page_id_t first_page_id_;

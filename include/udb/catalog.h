@@ -21,8 +21,9 @@ public:
     // Failed creation publishes no metadata and does not consume a table ID.
     // As with TableHeap, a late allocation/I/O failure can leave unreclaimed pages.
     const TableMetadata& CreateTable(const std::string& name, const Schema& schema);
-    // Removes only catalog ownership/metadata. Data pages are not reclaimed and
-    // next table IDs remain monotonic. Missing IDs throw out_of_range.
+    // Explicitly releases the table's complete page chain before removing its
+    // metadata. Pinned pages fail without changing catalog ownership.
+    // Table IDs remain monotonic. Missing IDs throw out_of_range.
     void DropTable(table_id_t id);
     const TableMetadata& GetTable(table_id_t id) const;
     const TableMetadata& GetTable(const std::string& name) const;

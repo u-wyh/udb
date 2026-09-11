@@ -103,4 +103,27 @@ void BufferPoolManager::FlushAllPages() {
     }
 }
 
+bool BufferPoolManager::CanDeletePage(page_id_t page_id) const {
+    if (!disk_.IsPageAllocated(page_id)) {
+        throw std::out_of_range("Page ID is not allocated");
+    }
+    const auto found = page_table_.find(page_id);
+    return found == page_table_.end() || frames_[found->second].pin_count == 0;
+}
+
+bool BufferPoolManager::DeletePage(page_id_t page_id) {
+    if (!CanDeletePage(page_id)) { return false; }
+    const auto found = page_table_.find(page_id);
+    if (found == page_table_.end()) {
+        disk_.DeallocatePage(page_id);
+        return true;
+    }
+    const auto index = found->second;
+    disk_.DeallocatePage(page_id);
+    page_table_.erase(found);
+    frames_[index] = Frame{};
+    Touch(index);
+    return true;
+}
+
 }  // namespace udb

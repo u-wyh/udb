@@ -58,8 +58,8 @@ void TestCatalog(const std::filesystem::path& path) {
 
     const auto& recreated = catalog.CreateTable("users", schema);
     Check(recreated.GetTableId() > other_id && recreated.GetTableId() != users_id &&
-          recreated.GetFirstPageId() > users_page && !catalog.GetTableHeap("users").GetFirstRID(),
-          "Catalog reused an ID/page or recreated a nonempty table");
+          recreated.GetFirstPageId() == users_page && !catalog.GetTableHeap("users").GetFirstRID(),
+          "Catalog did not reuse the freed page or recreated a nonempty table");
     Reject<std::out_of_range>([&] { catalog.GetTableHeap("users").GetRecord(user_rid); });
 }
 
@@ -123,8 +123,8 @@ void TestSqlAndPersistence(const std::filesystem::path& path) {
         engine.ExecuteSQL("CREATE TABLE users (id INTEGER, name VARCHAR(20))");
         new_users_id = catalog.GetTable("users").GetTableId();
         Check(new_users_id > gone_id && new_users_id != old_users_id &&
-              catalog.GetTable("users").GetFirstPageId() > old_users_page &&
-              engine.ExecuteSQL("SELECT * FROM users").rows.empty(), "Same-name recreation reused identity/data");
+              catalog.GetTable("users").GetFirstPageId() == old_users_page &&
+              engine.ExecuteSQL("SELECT * FROM users").rows.empty(), "Same-name recreation did not reuse a clean page");
         engine.ExecuteSQL("INSERT INTO users VALUES (99, 'new')");
         engine.ExecuteSQL("DROP TABLE gone");
         size_after_drop = std::filesystem::file_size(path);

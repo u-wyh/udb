@@ -44,7 +44,10 @@ const TableMetadata& Catalog::CreateTable(const std::string& name, const Schema&
 }
 
 void Catalog::DropTable(table_id_t id) {
-    if (tables_.erase(id) == 0) { throw std::out_of_range("Table ID not found"); }
+    const auto found = tables_.find(id);
+    if (found == tables_.end()) { throw std::out_of_range("Table ID not found"); }
+    found->second->heap.DeletePages();
+    tables_.erase(found);
 }
 
 const TableMetadata& Catalog::GetTable(table_id_t id) const { return tables_.at(id)->metadata; }

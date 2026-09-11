@@ -27,6 +27,10 @@ public:
     // Missing resident IDs throw out_of_range. FlushAllPages writes only dirty pages.
     void FlushPage(page_id_t page_id);
     void FlushAllPages();
+    // A pinned resident page cannot be deleted and leaves all state unchanged.
+    // Invalid/free IDs throw through DiskManager. Dirty deleted pages are discarded.
+    bool CanDeletePage(page_id_t page_id) const;
+    bool DeletePage(page_id_t page_id);
 
 private:
     struct Frame {

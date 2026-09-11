@@ -2,6 +2,7 @@
 
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace udb {
 namespace {
@@ -35,36 +36,39 @@ DiskManager::DiskManager(const std::filesystem::path& path) {
 }
 
 std::streamoff DiskManager::Offset(page_id_t page_id) const {
-    if (page_id < 0 || page_id >= page_count_) {
+    if (!IsPageAllocated(page_id)) {
         throw std::out_of_range("Page ID is not allocated");
     }
     return static_cast<std::streamoff>(page_id) * kPageBytes;
 }
 
 page_id_t DiskManager::AllocatePage() {
+    if (!free_pages_.empty()) {
+        const auto page_id = *free_pages_.begin();
+        WriteAt(page_id, Page{});
+        free_pages_.erase(free_pages_.begin());
+        return page_id;
+    }
     if (page_count_ >= kMaxPages || page_count_ == std::numeric_limits<page_id_t>::max()) {
         throw std::overflow_error("Database file has reached the page limit");
     }
-    const Page page;
-    file_.clear();
-    file_.seekp(static_cast<std::streamoff>(page_count_) * kPageBytes);
-    file_.write(page.data.data(), static_cast<std::streamsize>(PAGE_SIZE));
-    file_.flush();
-    if (!file_) {
-        throw std::runtime_error("Cannot allocate page");
-    }
+    WriteAt(page_count_, Page{});
     return page_count_++;
 }
 
-void DiskManager::WritePage(page_id_t page_id, const Page& page) {
-    const auto offset = Offset(page_id);
+void DiskManager::WriteAt(page_id_t page_id, const Page& page) {
     file_.clear();
-    file_.seekp(offset);
+    file_.seekp(static_cast<std::streamoff>(page_id) * kPageBytes);
     file_.write(page.data.data(), static_cast<std::streamsize>(PAGE_SIZE));
     file_.flush();
     if (!file_) {
-        throw std::runtime_error("Cannot write page");
+        throw std::runtime_error("Cannot write complete page");
     }
+}
+
+void DiskManager::WritePage(page_id_t page_id, const Page& page) {
+    Offset(page_id);
+    WriteAt(page_id, page);
 }
 
 Page DiskManager::ReadPage(page_id_t page_id) {
@@ -77,6 +81,32 @@ Page DiskManager::ReadPage(page_id_t page_id) {
         throw std::runtime_error("Cannot read complete page");
     }
     return page;
+}
+
+bool DiskManager::IsPageAllocated(page_id_t page_id) const {
+    return page_id >= 0 && page_id < page_count_ && free_pages_.count(page_id) == 0;
+}
+
+void DiskManager::DeallocatePage(page_id_t page_id) {
+    if (page_id < 0 || page_id >= page_count_) {
+        throw std::out_of_range("Page ID is outside the database file");
+    }
+    if (!free_pages_.insert(page_id).second) {
+        throw std::logic_error("Page is already free");
+    }
+}
+
+void DiskManager::RestoreFreePageIds(const std::vector<page_id_t>& page_ids) {
+    std::set<page_id_t> restored;
+    for (const auto page_id : page_ids) {
+        if (page_id < 0 || page_id >= page_count_) {
+            throw std::runtime_error("Metadata free page ID is out of range");
+        }
+        if (!restored.insert(page_id).second) {
+            throw std::runtime_error("Duplicate metadata free page ID");
+        }
+    }
+    free_pages_ = std::move(restored);
 }
 
 }  // namespace udb

@@ -52,7 +52,7 @@ void TestLifecycle(const std::filesystem::path& directory) {
         Check(std::filesystem::file_size(path) == 0, "Create reserved a data page");
         Check(database->GetCatalog().ListTables().empty(), "New catalog not empty");
         const auto bytes = ReadFile(meta);
-        Check(bytes.size() == 24 && bytes.substr(0, 8) == "UDBMETA1" && bytes[8] == 1, "Header fixture mismatch");
+        Check(bytes.size() == 32 && bytes.substr(0, 8) == "UDBMETA1" && bytes[8] == 2, "Header fixture mismatch");
         database->Close();
         database->Close();
         ExpectThrow<std::logic_error>([&] { database->GetCatalog(); });
@@ -144,30 +144,31 @@ void TestCorruption(const std::filesystem::path& directory) {
     }
     const auto original = ReadFile(meta);
     const auto data = ReadFile(path);
-    // Header 24 bytes; each one-character table/column entry is 35 bytes.
-    Check(original.size() == 94, "Metadata fixture length unexpected");
+    // v2 header is 32 bytes with no free IDs; each table/column entry is 35 bytes.
+    Check(original.size() == 102, "Metadata fixture length unexpected");
     auto reject = [&](const std::string& bytes) {
         WriteFile(meta, bytes);
         ExpectThrow<std::exception>([&] { Database::Open(path, 1); });
         Check(ReadFile(path) == data && ReadFile(meta) == bytes, "Failed Open mutated database");
     };
     for (std::size_t size = 0; size < original.size(); ++size) { reject(original.substr(0, size)); }
-    for (const auto offset : {std::size_t{0}, std::size_t{8}, std::size_t{54}}) {
+    for (const auto offset : {std::size_t{0}, std::size_t{8}, std::size_t{62}}) {
         auto bytes = original;
         bytes[offset] = static_cast<char>(255);  // magic, version, type
         reject(bytes);
     }
     auto bytes = original;
-    Put(bytes, 59, 0, 8); reject(bytes);  // Duplicate table ID.
-    bytes = original; bytes[71] = 'a'; reject(bytes);  // Duplicate name.
-    bytes = original; Put(bytes, 37, 999, 8); reject(bytes);  // Nonexistent first page.
-    bytes = original; Put(bytes, 37, UINT64_MAX, 8); reject(bytes);  // Negative ID encoding.
-    bytes = original; Put(bytes, 72, 0, 8); reject(bytes);  // Shared first page.
+    Put(bytes, 67, 0, 8); reject(bytes);  // Duplicate table ID.
+    bytes = original; bytes[79] = 'a'; reject(bytes);  // Duplicate name.
+    bytes = original; Put(bytes, 45, 999, 8); reject(bytes);  // Nonexistent first page.
+    bytes = original; Put(bytes, 45, UINT64_MAX, 8); reject(bytes);  // Negative ID encoding.
+    bytes = original; Put(bytes, 80, 0, 8); reject(bytes);  // Shared first page.
     bytes = original; Put(bytes, 16, 1, 8); reject(bytes);  // next_table_id <= maximum.
     bytes = original; Put(bytes, 12, UINT32_MAX, 4); reject(bytes);
-    bytes = original; Put(bytes, 32, UINT32_MAX, 4); reject(bytes);
-    bytes = original; Put(bytes, 45, UINT32_MAX, 4); reject(bytes);
-    bytes = original; Put(bytes, 55, 1, 4); reject(bytes);  // INTEGER cannot have max length.
+    bytes = original; Put(bytes, 24, UINT64_MAX, 8); reject(bytes);
+    bytes = original; Put(bytes, 40, UINT32_MAX, 4); reject(bytes);
+    bytes = original; Put(bytes, 53, UINT32_MAX, 4); reject(bytes);
+    bytes = original; Put(bytes, 63, 1, 4); reject(bytes);  // INTEGER cannot have max length.
     reject(original + "x");
     WriteFile(meta, original);
     auto database = Database::Open(path, 1);

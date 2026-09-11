@@ -98,8 +98,12 @@ add_executable(udb_drop_table_test tests/drop_table_test.cpp)
 target_link_libraries(udb_drop_table_test PRIVATE udb_sql_engine)
 add_test(NAME drop_table COMMAND udb_drop_table_test)
 
+add_executable(udb_free_page_test tests/free_page_test.cpp)
+target_link_libraries(udb_free_page_test PRIVATE udb_sql_engine)
+add_test(NAME free_page COMMAND udb_free_page_test)
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    foreach(target udb udb_storage udb_storage_test udb_buffer_pool_test udb_slotted_page_test udb_table_heap_test udb_types udb_tuple_test udb_catalog udb_catalog_test udb_database_test udb_sql udb_sql_test udb_binder udb_binder_test udb_planner udb_planner_test udb_executor udb_executor_test udb_sql_engine udb_sql_engine_test udb_expression_test udb_delete_test udb_update_test udb_drop_table_test)
+    foreach(target udb udb_storage udb_storage_test udb_buffer_pool_test udb_slotted_page_test udb_table_heap_test udb_types udb_tuple_test udb_catalog udb_catalog_test udb_database_test udb_sql udb_sql_test udb_binder udb_binder_test udb_planner udb_planner_test udb_executor udb_executor_test udb_sql_engine udb_sql_engine_test udb_expression_test udb_delete_test udb_update_test udb_drop_table_test udb_free_page_test)
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
     endforeach()
 endif()

@@ -135,3 +135,12 @@
 - 当前限制：DROP 后暂不回收数据页。
 - Commit：见 Git 历史
 - 下一步：Page 回收与 Free Page 管理。
+
+## 阶段 17：Free Page Management
+
+- 做了什么：实现 Page 释放与复用，并让 DROP TABLE 回收完整 TableHeap 页面链。
+- 关键设计：DiskManager 确定性复用最小空闲页并清零；BufferPoolManager 拒绝删除 pinned 页且清除缓存状态；metadata v2 以小端格式持久化空闲页集合。
+- 测试结果：从零构建无警告，全部 17 个测试及 ASan/UBSan 通过，覆盖跨页回收、重开复用和损坏元数据，git diff --check 通过。
+- 当前限制：释放 Page 会复用，但不会缩小 .udb 文件。
+- Commit：见 Git 历史
+- 下一步：B+ Tree 索引基础。
