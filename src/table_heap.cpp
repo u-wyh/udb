@@ -123,6 +123,14 @@ Record TableHeap::GetRecord(RID rid) const {
     return page.View().GetRecord(rid);
 }
 
+bool TableHeap::UpdateRecord(RID rid, const Record& record) {
+    RequireMember(rid.page_id);
+    PinnedPage page(pool_, rid.page_id);
+    if (!page.View().UpdateRecord(rid, record)) { return false; }
+    page.MarkDirty();
+    return true;
+}
+
 void TableHeap::DeleteRecord(RID rid) {
     RequireMember(rid.page_id);
     PinnedPage page(pool_, rid.page_id);

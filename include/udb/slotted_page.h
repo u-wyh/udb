@@ -20,6 +20,9 @@ public:
     // never reused, so a deleted RID cannot alias a later record.
     std::optional<RID> InsertRecord(const Record& record);
     Record GetRecord(RID rid) const;
+    // Returns false only when the replacement cannot fit. The page remains
+    // byte-for-byte unchanged on failure; successful updates preserve all RIDs.
+    bool UpdateRecord(RID rid, const Record& record);
     void DeleteRecord(RID rid);
     std::optional<RID> GetFirstRID() const;
     std::optional<RID> GetNextRID(RID current) const;  // Current must be live.

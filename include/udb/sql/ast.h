@@ -66,6 +66,18 @@ struct DeleteStatement {
     ExpressionPtr predicate = nullptr;
 };
 
-using Statement = std::variant<CreateTableStatement, InsertStatement, SelectStatement, DeleteStatement>;
+struct UpdateAssignment {
+    std::string column_name;
+    Literal value;
+};
+
+struct UpdateStatement {
+    std::string table_name;
+    std::vector<UpdateAssignment> assignments;
+    ExpressionPtr predicate = nullptr;
+};
+
+using Statement = std::variant<CreateTableStatement, InsertStatement, SelectStatement,
+                               DeleteStatement, UpdateStatement>;
 
 }  // namespace udb::sql

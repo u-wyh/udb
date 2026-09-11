@@ -138,6 +138,63 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             result.affected_rows = matches.size();
             return result;
         }
+        case PlanType::Update: {
+            const auto& update = dynamic_cast<const UpdatePlan&>(plan);
+            const auto& source = catalog_.GetTable(update.GetTableId()).GetSchema();
+            CheckSchema(update.GetTableSchema(), source);
+            if (update.GetAssignments().empty()) {
+                throw std::invalid_argument("UPDATE plan has no assignments");
+            }
+            std::vector<bool> assigned(source.GetColumnCount(), false);
+            for (const auto& assignment : update.GetAssignments()) {
+                if (assignment.column_index >= source.GetColumnCount() || assigned[assignment.column_index]) {
+                    throw std::invalid_argument("Invalid UPDATE assignment index");
+                }
+                assigned[assignment.column_index] = true;
+                const auto& column = source.GetColumn(assignment.column_index);
+                if (assignment.value.GetType() != column.GetType() ||
+                    (!assignment.value.IsNull() && column.GetType() == TypeId::VARCHAR &&
+                     assignment.value.GetVarchar().size() > column.GetMaxLength())) {
+                    throw std::invalid_argument("UPDATE assignment does not match schema");
+                }
+            }
+            const auto& predicate = update.GetPredicate();
+            if (predicate && predicate->type != TypeId::BOOLEAN) {
+                throw std::invalid_argument("Plan predicate must be BOOLEAN");
+            }
+            CheckExpression(predicate, source);
+            auto& heap = catalog_.GetTableHeap(update.GetTableId());
+            std::vector<std::pair<RID, Record>> replacements;
+            for (auto rid = heap.GetFirstRID(); rid; rid = heap.GetNextRID(*rid)) {
+                const auto tuple = Tuple::Deserialize(heap.GetRecord(*rid), source);
+                bool match = !predicate;
+                if (predicate) {
+                    const auto value = EvaluateExpression(*predicate, tuple);
+                    if (value.GetType() != TypeId::BOOLEAN) {
+                        throw std::invalid_argument("Predicate did not evaluate to BOOLEAN");
+                    }
+                    match = !value.IsNull() && value.GetBoolean();
+                }
+                if (!match) { continue; }
+                std::vector<Value> values;
+                values.reserve(source.GetColumnCount());
+                for (std::size_t i = 0; i < source.GetColumnCount(); ++i) { values.push_back(tuple.GetValue(i)); }
+                for (const auto& assignment : update.GetAssignments()) {
+                    values[assignment.column_index] = assignment.value;
+                }
+                replacements.emplace_back(*rid, Tuple(source, std::move(values)).Serialize(source));
+            }
+            std::size_t affected = 0;
+            for (const auto& replacement : replacements) {
+                if (!heap.UpdateRecord(replacement.first, replacement.second)) {
+                    throw std::runtime_error("Updated record does not fit in its current page");
+                }
+                ++affected;
+            }
+            ExecutionResult result{PlanType::Update};
+            result.affected_rows = affected;
+            return result;
+        }
     }
     throw std::invalid_argument("Unsupported plan type");
 }

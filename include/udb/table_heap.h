@@ -18,6 +18,9 @@ public:
     // page; no page reclamation or transactional rollback is provided.
     RID InsertRecord(const Record& record);
     Record GetRecord(RID rid) const;
+    // No cross-page relocation: false means the replacement cannot fit in the
+    // RID's current page, with the original record unchanged.
+    bool UpdateRecord(RID rid, const Record& record);
     void DeleteRecord(RID rid);
     std::optional<RID> GetFirstRID() const;
     // Current must be a live RID in this table; nullopt denotes end of scan.

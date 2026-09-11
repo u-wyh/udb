@@ -201,4 +201,27 @@ BoundDeleteStatement Binder::BindStatement(const DeleteStatement& statement) con
     return {table.GetTableId(), table.GetTableName(), schema, std::move(predicate)};
 }
 
+BoundUpdateStatement Binder::BindStatement(const UpdateStatement& statement) const {
+    const auto& table = Lookup(statement.table_name);
+    const auto& schema = table.GetSchema();
+    if (statement.assignments.empty()) { throw BindError("UPDATE requires at least one assignment"); }
+    std::vector<bool> assigned(schema.GetColumnCount(), false);
+    std::vector<BoundUpdateAssignment> assignments;
+    assignments.reserve(statement.assignments.size());
+    for (const auto& assignment : statement.assignments) {
+        const auto index = FindColumn(schema, assignment.column_name);
+        if (assigned[index]) { throw BindError("Column assigned more than once: " + assignment.column_name); }
+        assigned[index] = true;
+        const auto& column = schema.GetColumn(index);
+        auto value = BindExpressionLiteral(assignment.value, column.GetType());
+        if (!value.IsNull() && column.GetType() == TypeId::VARCHAR &&
+            value.GetVarchar().size() > column.GetMaxLength()) {
+            throw BindError("VARCHAR too long for column: " + column.GetName());
+        }
+        assignments.push_back({index, std::move(value)});
+    }
+    auto predicate = statement.predicate ? BindExpression(statement.predicate, schema, TypeId::BOOLEAN) : nullptr;
+    return {table.GetTableId(), table.GetTableName(), schema, std::move(assignments), std::move(predicate)};
+}
+
 }  // namespace udb::sql

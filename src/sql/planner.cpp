@@ -20,6 +20,16 @@ std::unique_ptr<PlanNode> Build(const BoundDeleteStatement& statement) {
     return std::make_unique<DeletePlan>(statement.table_id, statement.schema, statement.predicate);
 }
 
+std::unique_ptr<PlanNode> Build(const BoundUpdateStatement& statement) {
+    std::vector<UpdatePlanAssignment> assignments;
+    assignments.reserve(statement.assignments.size());
+    for (const auto& assignment : statement.assignments) {
+        assignments.push_back({assignment.column_index, assignment.value});
+    }
+    return std::make_unique<UpdatePlan>(statement.table_id, statement.schema,
+                                        std::move(assignments), statement.predicate);
+}
+
 }  // namespace
 
 std::unique_ptr<PlanNode> Planner::Plan(const BoundStatement& statement) {

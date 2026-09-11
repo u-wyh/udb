@@ -7,7 +7,7 @@
 namespace udb::sql {
 
 // A returned result denotes success; errors propagate as exceptions.
-// CREATE/INSERT/DELETE have empty output schemas and rows. Mutations report
+// CREATE/INSERT/DELETE/UPDATE have empty output schemas and rows. Mutations report
 // their affected row count.
 struct ExecutionResult {
     explicit ExecutionResult(PlanType plan_type) : type(plan_type) {}

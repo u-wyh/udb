@@ -19,6 +19,7 @@ private:
     InsertStatement Insert();
     SelectStatement Select();
     DeleteStatement Delete();
+    UpdateStatement Update();
     Literal ParseLiteral();
     ExpressionPtr ParseExpression();
     ExpressionPtr ParseOr();

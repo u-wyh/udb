@@ -36,7 +36,20 @@ struct BoundDeleteStatement {
     BoundExpressionPtr predicate = nullptr;
 };
 
+struct BoundUpdateAssignment {
+    std::size_t column_index;
+    Value value;
+};
+
+struct BoundUpdateStatement {
+    table_id_t table_id;
+    std::string table_name;
+    Schema schema;
+    std::vector<BoundUpdateAssignment> assignments;
+    BoundExpressionPtr predicate = nullptr;
+};
+
 using BoundStatement = std::variant<BoundCreateTableStatement, BoundInsertStatement,
-                                    BoundSelectStatement, BoundDeleteStatement>;
+                                    BoundSelectStatement, BoundDeleteStatement, BoundUpdateStatement>;
 
 }  // namespace udb::sql

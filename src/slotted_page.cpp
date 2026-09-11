@@ -122,6 +122,37 @@ Record SlottedPage::GetRecord(RID rid) const {
     return Record(page_.data.data() + Read(page_, slot, 2), Read(page_, slot + 2, 2));
 }
 
+bool SlottedPage::UpdateRecord(RID rid, const Record& record) {
+    const auto updated = FindSlot(rid);
+    const auto count = Read(page_, 4, 2);
+    const auto directory_end = HEADER_SIZE + static_cast<std::size_t>(count) * SLOT_SIZE;
+    const auto old_size = static_cast<std::size_t>(Read(page_, updated + 2, 2));
+    const auto payload_size = PAGE_SIZE - static_cast<std::size_t>(Read(page_, 6, 2));
+    if (record.Size() > old_size + (PAGE_SIZE - directory_end - payload_size)) {
+        return false;
+    }
+
+    Page compacted;
+    std::memcpy(compacted.data.data(), page_.data.data(), directory_end);
+    std::size_t end = PAGE_SIZE;
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto slot = HEADER_SIZE + i * SLOT_SIZE;
+        if (Read(page_, slot + 4, 2) == 0) { continue; }
+        const bool replacement = slot == updated;
+        const auto size = replacement ? record.Size() : static_cast<std::size_t>(Read(page_, slot + 2, 2));
+        end -= size;
+        if (size != 0) {
+            const auto* data = replacement ? record.Data() : page_.data.data() + Read(page_, slot, 2);
+            std::memcpy(compacted.data.data() + end, data, size);
+        }
+        Write(compacted, slot, 2, end);
+        Write(compacted, slot + 2, 2, size);
+    }
+    Write(compacted, 6, 2, end);
+    page_ = compacted;
+    return true;
+}
+
 void SlottedPage::DeleteRecord(RID rid) {
     const auto deleted = FindSlot(rid);
     // Repack into a fixed-size scratch Page to avoid overlapping copies. Keep

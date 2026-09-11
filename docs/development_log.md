@@ -117,3 +117,12 @@
 - 测试结果：从零构建无编译警告，全部 14 个测试及 ASan/UBSan 通过，覆盖跨页删除、RID 稳定性和重开恢复，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：UPDATE。
+
+## 阶段 15：UPDATE
+
+- 做了什么：实现 SlottedPage / TableHeap 原位 Record 更新，以及 UPDATE 的解析、绑定、计划与执行。
+- 关键设计：临时 Page 重排保证单条失败不修改原记录且 RID 稳定；SET 绑定为列下标和已类型化 Value；先收集替换内容再更新。
+- 测试结果：从零构建无警告，全部 15 个测试及 ASan/UBSan 通过，覆盖跨页更新、空间失败原子性和重开恢复，git diff --check 通过。
+- 当前限制：增长后的 Record 若当前 Page 放不下则更新失败；无事务时不保证多行 UPDATE 原子性。
+- Commit：见 Git 历史
+- 下一步：DROP TABLE 与基础 DDL 完善。
