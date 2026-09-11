@@ -162,6 +162,15 @@ SelectStatement Parser::Select() {
             throw SqlError("LIMIT is outside the supported range", token.position);
         }
         statement.limit = static_cast<std::size_t>(limit);
+        if (Match(TokenType::Offset)) {
+            const auto offset_token = Take(TokenType::IntegerLiteral, "nonnegative OFFSET");
+            const auto offset = IntegerValue(offset_token);
+            if (offset < 0 || static_cast<std::uint64_t>(offset) >
+                    static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+                throw SqlError("OFFSET is outside the supported range", offset_token.position);
+            }
+            statement.offset = static_cast<std::size_t>(offset);
+        }
     }
     return statement;
 }

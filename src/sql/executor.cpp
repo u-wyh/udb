@@ -153,14 +153,15 @@ bool OrderLess(const Tuple& left, const Tuple& right,
 void FinishScan(ExecutionResult& result, std::vector<Tuple> tuples,
                 const Schema& output, const std::vector<std::size_t>& indexes,
                 const std::vector<PlanOrderBy>& order_by,
-                const std::optional<std::size_t>& limit) {
+                const std::optional<std::size_t>& limit, std::size_t offset) {
     if (!order_by.empty()) {
         std::stable_sort(tuples.begin(), tuples.end(),
             [&order_by](const Tuple& a, const Tuple& b) { return OrderLess(a, b, order_by); });
     }
-    for (const auto& tuple : tuples) {
+    for (std::size_t position = 0; position < tuples.size(); ++position) {
+        if (position < offset) { continue; }
         if (ReachedLimit(limit, result.rows.size())) { break; }
-        result.rows.push_back(Project(tuple, output, indexes));
+        result.rows.push_back(Project(tuples[position], output, indexes));
     }
 }
 
@@ -233,7 +234,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
                 if (Matches(predicate, tuple)) { tuples.push_back(tuple); }
             }
             FinishScan(result, std::move(tuples), output, indexes,
-                       scan.GetOrderBy(), scan.GetLimit());
+                       scan.GetOrderBy(), scan.GetLimit(), scan.GetOffset());
             return result;
         }
         case PlanType::IndexScan: {
@@ -257,7 +258,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             std::vector<Tuple> tuples;
             if (Matches(predicate, tuple)) { tuples.push_back(tuple); }
             FinishScan(result, std::move(tuples), output, indexes,
-                       scan.GetOrderBy(), scan.GetLimit());
+                       scan.GetOrderBy(), scan.GetLimit(), scan.GetOffset());
             return result;
         }
         case PlanType::IndexRangeScan: {
@@ -285,7 +286,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
                 if (Matches(predicate, tuple)) { tuples.push_back(tuple); }
             }
             FinishScan(result, std::move(tuples), output, indexes,
-                       scan.GetOrderBy(), scan.GetLimit());
+                       scan.GetOrderBy(), scan.GetLimit(), scan.GetOffset());
             return result;
         }
         case PlanType::Delete: {

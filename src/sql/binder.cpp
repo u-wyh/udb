@@ -230,7 +230,8 @@ BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) con
         order_by.push_back({FindColumn(schema, order.column_name), order.ascending});
     }
     return {table.GetTableId(), table.GetTableName(), std::move(indexes),
-            Schema(std::move(columns)), std::move(predicate), std::move(order_by), statement.limit};
+            Schema(std::move(columns)), std::move(predicate), std::move(order_by),
+            statement.limit, statement.offset};
 }
 
 BoundDeleteStatement Binder::BindStatement(const DeleteStatement& statement) const {

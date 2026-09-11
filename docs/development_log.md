@@ -224,3 +224,11 @@
 - 测试结果：全新构建无编译警告，26 / 26 测试及 ASan / UBSan 通过，覆盖混合方向、稳定性、索引路径、LIMIT 和重开，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 27：OFFSET。
+
+## 阶段 27：OFFSET
+
+- 做了什么：为 SELECT 增加 `LIMIT n OFFSET m`，并贯通 Binder、三类扫描 Plan 与 Executor。
+- 关键设计：OFFSET 在过滤和排序后跳过结果，再应用 LIMIT；仅允许与 LIMIT 组合；三种扫描路径共享相同分页逻辑。
+- 测试结果：全新构建无编译警告，27 / 27 测试及 ASan / UBSan 通过，覆盖语法边界、排序、索引路径、超范围和重开，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 28：无 GROUP BY 的基础 Aggregate。

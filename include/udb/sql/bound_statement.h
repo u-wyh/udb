@@ -51,6 +51,7 @@ struct BoundSelectStatement {
     BoundExpressionPtr predicate = nullptr;
     std::vector<BoundOrderBy> order_by;
     std::optional<std::size_t> limit;
+    std::size_t offset = 0;
 };
 
 struct BoundDeleteStatement {

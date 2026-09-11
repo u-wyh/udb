@@ -104,15 +104,17 @@ public:
     SeqScanPlan(table_id_t id, std::vector<std::size_t> indexes, Schema output_schema,
                 BoundExpressionPtr predicate = nullptr,
                 std::vector<PlanOrderBy> order_by = {},
-                std::optional<std::size_t> limit = std::nullopt)
+                std::optional<std::size_t> limit = std::nullopt,
+                std::size_t offset = 0)
         : PlanNode(PlanType::SeqScan, std::move(output_schema)), table_id_(id),
           indexes_(std::move(indexes)), predicate_(std::move(predicate)),
-          order_by_(order_by), limit_(limit) {}
+          order_by_(order_by), limit_(limit), offset_(offset) {}
     table_id_t GetTableId() const { return table_id_; }
     const std::vector<std::size_t>& GetColumnIndexes() const { return indexes_; }
     const BoundExpressionPtr& GetPredicate() const { return predicate_; }
     const std::vector<PlanOrderBy>& GetOrderBy() const { return order_by_; }
     const std::optional<std::size_t>& GetLimit() const { return limit_; }
+    std::size_t GetOffset() const { return offset_; }
 
 private:
     table_id_t table_id_;
@@ -120,6 +122,7 @@ private:
     BoundExpressionPtr predicate_;
     std::vector<PlanOrderBy> order_by_;
     std::optional<std::size_t> limit_;
+    std::size_t offset_;
 };
 
 class IndexScanPlan final : public PlanNode {
@@ -128,10 +131,11 @@ public:
                   std::vector<std::size_t> indexes, Schema output_schema,
                   BoundExpressionPtr predicate,
                   std::vector<PlanOrderBy> order_by = {},
-                  std::optional<std::size_t> limit = std::nullopt)
+                  std::optional<std::size_t> limit = std::nullopt,
+                  std::size_t offset = 0)
         : PlanNode(PlanType::IndexScan, std::move(output_schema)), table_id_(table_id),
           index_id_(index_id), key_(key), indexes_(std::move(indexes)),
-          predicate_(std::move(predicate)), order_by_(order_by), limit_(limit) {}
+          predicate_(std::move(predicate)), order_by_(order_by), limit_(limit), offset_(offset) {}
     table_id_t GetTableId() const { return table_id_; }
     index_id_t GetIndexId() const { return index_id_; }
     std::int64_t GetKey() const { return key_; }
@@ -139,6 +143,7 @@ public:
     const BoundExpressionPtr& GetPredicate() const { return predicate_; }
     const std::vector<PlanOrderBy>& GetOrderBy() const { return order_by_; }
     const std::optional<std::size_t>& GetLimit() const { return limit_; }
+    std::size_t GetOffset() const { return offset_; }
 
 private:
     table_id_t table_id_;
@@ -148,6 +153,7 @@ private:
     BoundExpressionPtr predicate_;
     std::vector<PlanOrderBy> order_by_;
     std::optional<std::size_t> limit_;
+    std::size_t offset_;
 };
 
 class IndexRangeScanPlan final : public PlanNode {
@@ -158,12 +164,13 @@ public:
                        std::vector<std::size_t> indexes, Schema output_schema,
                        BoundExpressionPtr predicate,
                        std::vector<PlanOrderBy> order_by = {},
-                       std::optional<std::size_t> limit = std::nullopt)
+                       std::optional<std::size_t> limit = std::nullopt,
+                       std::size_t offset = 0)
         : PlanNode(PlanType::IndexRangeScan, std::move(output_schema)), table_id_(table_id),
           index_id_(index_id), lower_(lower), upper_(upper),
           lower_inclusive_(lower_inclusive), upper_inclusive_(upper_inclusive),
           indexes_(std::move(indexes)), predicate_(std::move(predicate)),
-          order_by_(order_by), limit_(limit) {}
+          order_by_(order_by), limit_(limit), offset_(offset) {}
     table_id_t GetTableId() const { return table_id_; }
     index_id_t GetIndexId() const { return index_id_; }
     const std::optional<std::int64_t>& GetLowerBound() const { return lower_; }
@@ -174,6 +181,7 @@ public:
     const BoundExpressionPtr& GetPredicate() const { return predicate_; }
     const std::vector<PlanOrderBy>& GetOrderBy() const { return order_by_; }
     const std::optional<std::size_t>& GetLimit() const { return limit_; }
+    std::size_t GetOffset() const { return offset_; }
 
 private:
     table_id_t table_id_;
@@ -186,6 +194,7 @@ private:
     BoundExpressionPtr predicate_;
     std::vector<PlanOrderBy> order_by_;
     std::optional<std::size_t> limit_;
+    std::size_t offset_;
 };
 
 class DeletePlan final : public PlanNode {

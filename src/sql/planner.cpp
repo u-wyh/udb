@@ -150,7 +150,7 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement) {
     }
     return std::make_unique<SeqScanPlan>(statement.table_id, statement.column_indexes,
                                          statement.output_schema, statement.predicate,
-                                         order_by, statement.limit);
+                                         order_by, statement.limit, statement.offset);
 }
 
 std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement,
@@ -178,7 +178,7 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement,
         return std::make_unique<IndexScanPlan>(statement.table_id, *selected_index,
                                                *selected_key, statement.column_indexes,
                                                statement.output_schema, statement.predicate,
-                                               order_by, statement.limit);
+                                               order_by, statement.limit, statement.offset);
     }
 
     std::map<std::size_t, RangeCandidate> ranges;
@@ -199,7 +199,8 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement,
         statement.table_id, *selected_index, selected_range->lower,
         selected_range->lower_inclusive, selected_range->upper,
         selected_range->upper_inclusive, statement.column_indexes,
-        statement.output_schema, statement.predicate, order_by, statement.limit);
+        statement.output_schema, statement.predicate, order_by,
+        statement.limit, statement.offset);
 }
 
 std::unique_ptr<PlanNode> Build(const BoundDeleteStatement& statement) {

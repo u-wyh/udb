@@ -28,7 +28,7 @@ enum class TokenType {
     LeftParen, RightParen, Comma, Semicolon, Star,
     Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
     Create, Drop, Table, Index, On, Insert, Into, Values, Select, Delete, Update, Set, From, Where,
-    Order, By, Asc, Desc, Limit,
+    Order, By, Asc, Desc, Limit, Offset,
     And, Or, Not,
     Integer, BigInt, Boolean, Varchar, True, False, Null
 };
