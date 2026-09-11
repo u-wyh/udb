@@ -42,7 +42,8 @@ void TestOwnedPlans() {
     Check(insert.GetOutputSchema().GetColumnCount() == 0 && insert.GetChildren().empty(), "INSERT output/children wrong");
     std::get<BoundInsertStatement>(bound).values[0] = Value::Integer(9);
     Check(insert.GetValues()[0] == Value::Integer(7), "Plan aliases bound values");
-    bound = BoundSelectStatement{42, "users", {1, 0}, Schema({schema.GetColumn(1), schema.GetColumn(0)})};
+    bound = BoundSelectStatement{42, "users", {1, 0},
+        Schema({schema.GetColumn(1), schema.GetColumn(0)}), nullptr, std::nullopt};
     const auto scan_node = Planner::Plan(bound);
     const auto& scan = dynamic_cast<const SeqScanPlan&>(*scan_node);
     Check(scan.GetType() == PlanType::SeqScan && scan.GetTableId() == 42 &&

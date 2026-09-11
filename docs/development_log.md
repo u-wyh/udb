@@ -198,3 +198,12 @@
 - 当前限制：无 IF EXISTS、CASCADE/RESTRICT 和并发 DDL。
 - Commit：见 Git 历史
 - 下一步：阶段 24：SELECT LIMIT。
+
+## 阶段 24：SELECT LIMIT
+
+- 做了什么：为 SELECT 增加非负整数字面量 LIMIT，并贯通 Parser、Binder、三类扫描 Plan 与 Executor。
+- 关键设计：LIMIT 在完整 predicate 过滤后计数；LIMIT 0 直接返回；SeqScan、IndexScan 和 IndexRangeScan 共享一致语义。
+- 测试结果：从零构建无编译警告，24 / 24 测试及 ASan / UBSan 通过，覆盖错误语法、空表、DML、索引扫描和重开，git diff --check 通过。
+- 当前限制：无 OFFSET、参数化 LIMIT 和 ORDER BY。
+- Commit：见 Git 历史
+- 下一步：阶段 25：SELECT ORDER BY。

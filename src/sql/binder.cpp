@@ -225,7 +225,7 @@ BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) con
     // explicitly rejected for now instead of inventing output aliases.
     auto predicate = statement.predicate ? BindExpression(statement.predicate, schema, TypeId::BOOLEAN) : nullptr;
     return {table.GetTableId(), table.GetTableName(), std::move(indexes),
-            Schema(std::move(columns)), std::move(predicate)};
+            Schema(std::move(columns)), std::move(predicate), statement.limit};
 }
 
 BoundDeleteStatement Binder::BindStatement(const DeleteStatement& statement) const {

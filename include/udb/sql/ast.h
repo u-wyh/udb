@@ -3,6 +3,7 @@
 #include "udb/type_id.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -73,6 +74,7 @@ struct SelectStatement {
     bool select_all = false;
     std::vector<std::string> column_names;
     ExpressionPtr predicate = nullptr;
+    std::optional<std::size_t> limit;
 };
 
 struct DeleteStatement {

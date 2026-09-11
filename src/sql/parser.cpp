@@ -145,6 +145,15 @@ SelectStatement Parser::Select() {
     Take(TokenType::From, "FROM");
     statement.table_name = Take(TokenType::Identifier, "table name").text;
     if (Match(TokenType::Where)) { statement.predicate = ParseExpression(); }
+    if (Match(TokenType::Limit)) {
+        const auto token = Take(TokenType::IntegerLiteral, "nonnegative LIMIT");
+        const auto limit = IntegerValue(token);
+        if (limit < 0 || static_cast<std::uint64_t>(limit) >
+                static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+            throw SqlError("LIMIT is outside the supported range", token.position);
+        }
+        statement.limit = static_cast<std::size_t>(limit);
+    }
     return statement;
 }
 

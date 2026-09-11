@@ -44,6 +44,7 @@ struct BoundSelectStatement {
     std::vector<std::size_t> column_indexes;
     Schema output_schema;
     BoundExpressionPtr predicate = nullptr;
+    std::optional<std::size_t> limit;
 };
 
 struct BoundDeleteStatement {

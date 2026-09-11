@@ -105,6 +105,10 @@ Tuple Project(const Tuple& tuple, const Schema& output,
     return Tuple(output, std::move(values));
 }
 
+bool ReachedLimit(const std::optional<std::size_t>& limit, std::size_t row_count) {
+    return limit && row_count >= *limit;
+}
+
 }  // namespace
 
 ExecutionResult Executor::Execute(const PlanNode& plan) {
@@ -166,10 +170,14 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             CheckScan(source, output, indexes, predicate);
             ExecutionResult result{PlanType::SeqScan};
             result.output_schema = output;
+            if (ReachedLimit(scan.GetLimit(), 0)) { return result; }
             const auto& heap = catalog_.GetTableHeap(scan.GetTableId());
             for (auto rid = heap.GetFirstRID(); rid; rid = heap.GetNextRID(*rid)) {
                 const auto tuple = Tuple::Deserialize(heap.GetRecord(*rid), source);
-                if (Matches(predicate, tuple)) { result.rows.push_back(Project(tuple, output, indexes)); }
+                if (Matches(predicate, tuple)) {
+                    result.rows.push_back(Project(tuple, output, indexes));
+                    if (ReachedLimit(scan.GetLimit(), result.rows.size())) { break; }
+                }
             }
             return result;
         }
@@ -186,6 +194,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             }
             ExecutionResult result{PlanType::IndexScan};
             result.output_schema = output;
+            if (ReachedLimit(scan.GetLimit(), 0)) { return result; }
             const auto rid = index.GetTree().GetValue(scan.GetKey());
             if (!rid) { return result; }
             const auto tuple = Tuple::Deserialize(
@@ -206,6 +215,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             }
             ExecutionResult result{PlanType::IndexRangeScan};
             result.output_schema = output;
+            if (ReachedLimit(scan.GetLimit(), 0)) { return result; }
             const auto entries = index.GetTree().ScanRange(
                 scan.GetLowerBound(), scan.IsLowerInclusive(),
                 scan.GetUpperBound(), scan.IsUpperInclusive());
@@ -215,6 +225,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
                 const auto tuple = Tuple::Deserialize(heap.GetRecord(rid), source);
                 if (Matches(predicate, tuple)) {
                     result.rows.push_back(Project(tuple, output, indexes));
+                    if (ReachedLimit(scan.GetLimit(), result.rows.size())) { break; }
                 }
             }
             return result;
