@@ -93,3 +93,11 @@
 - 测试结果：从零构建无警告，全部 11 个测试及 ASan/UBSan 通过，覆盖完整 SQL 链路、多页扫描和重开恢复，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：SQL Engine / Database 对外执行接口。
+
+## 阶段 12：SQL Engine
+
+- 做了什么：实现统一 ExecuteSQL 入口，串联 Parser、Binder、Planner 与 Executor。
+- 关键设计：SqlEngine 仅持有 Catalog 引用并编排现有模块；复用 ExecutionResult；异常原样传播且不改变显式 Flush / Close 语义。
+- 测试结果：从零构建无警告，全部 12 个测试及 ASan/UBSan 通过，覆盖错误传播、多页查询和重开执行，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：WHERE 与表达式系统。
