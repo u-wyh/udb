@@ -171,3 +171,12 @@
 - 当前限制：SELECT 仍使用 SeqScan；无 DROP INDEX、非唯一索引、事务、WAL 与 MVCC。
 - Commit：见 Git 历史
 - 下一步：阶段 21：Index Scan + Planner 索引选择。
+
+## 阶段 21：Index Scan + Planner 索引选择
+
+- 做了什么：新增 IndexScanPlan，并让 SQL Planner 为 INTEGER / BIGINT 单列索引等值条件选择 B+ Tree 精确查询。
+- 关键设计：支持 column = literal 与反向形式；AND 可提取索引 key 但保留完整 predicate 作为 residual filter；其他条件继续 SeqScan，多索引按最小 index_id 确定性选择。
+- 测试结果：从零构建无编译警告，21 / 21 测试及 ASan / UBSan 通过，覆盖多页表、DML 后查询、重开和 SeqScan 语义对照，git diff --check 通过。
+- 当前限制：仅支持精确等值 IndexScan，无范围扫描、成本模型、复合索引和 index-only scan。
+- Commit：见 Git 历史
+- 下一步：阶段 22：B+ Tree Range Scan + 范围条件索引查询。

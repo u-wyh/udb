@@ -22,7 +22,7 @@ add_library(udb_binder src/sql/binder.cpp)
 target_link_libraries(udb_binder PUBLIC udb_sql udb_catalog)
 
 add_library(udb_planner src/sql/planner.cpp)
-target_include_directories(udb_planner PUBLIC include)
+target_link_libraries(udb_planner PUBLIC udb_catalog)
 
 add_library(udb_executor src/sql/executor.cpp src/sql/expression.cpp)
 target_link_libraries(udb_executor PUBLIC udb_catalog udb_planner)
@@ -114,8 +114,12 @@ add_executable(udb_index_maintenance_test tests/index_maintenance_test.cpp)
 target_link_libraries(udb_index_maintenance_test PRIVATE udb_sql_engine)
 add_test(NAME index_maintenance COMMAND udb_index_maintenance_test)
 
+add_executable(udb_index_scan_test tests/index_scan_test.cpp)
+target_link_libraries(udb_index_scan_test PRIVATE udb_sql_engine)
+add_test(NAME index_scan COMMAND udb_index_scan_test)
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    foreach(target udb udb_storage udb_storage_test udb_buffer_pool_test udb_slotted_page_test udb_table_heap_test udb_types udb_tuple_test udb_catalog udb_catalog_test udb_database_test udb_sql udb_sql_test udb_binder udb_binder_test udb_planner udb_planner_test udb_executor udb_executor_test udb_sql_engine udb_sql_engine_test udb_expression_test udb_delete_test udb_update_test udb_drop_table_test udb_free_page_test udb_b_plus_tree_test udb_create_index_test udb_index_maintenance_test)
+    foreach(target udb udb_storage udb_storage_test udb_buffer_pool_test udb_slotted_page_test udb_table_heap_test udb_types udb_tuple_test udb_catalog udb_catalog_test udb_database_test udb_sql udb_sql_test udb_binder udb_binder_test udb_planner udb_planner_test udb_executor udb_executor_test udb_sql_engine udb_sql_engine_test udb_expression_test udb_delete_test udb_update_test udb_drop_table_test udb_free_page_test udb_b_plus_tree_test udb_create_index_test udb_index_maintenance_test udb_index_scan_test)
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
     endforeach()
 endif()

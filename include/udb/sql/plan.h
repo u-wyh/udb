@@ -1,6 +1,7 @@
 #pragma once
 
 #include "udb/table_metadata.h"
+#include "udb/index_metadata.h"
 #include "udb/sql/bound_expression.h"
 #include "udb/value.h"
 
@@ -8,7 +9,7 @@
 
 namespace udb::sql {
 
-enum class PlanType { CreateTable, CreateIndex, DropTable, Insert, SeqScan, Delete, Update };
+enum class PlanType { CreateTable, CreateIndex, DropTable, Insert, SeqScan, IndexScan, Delete, Update };
 
 // Logical descriptions only. All current plans are leaves with no children.
 class PlanNode {
@@ -91,6 +92,28 @@ public:
 
 private:
     table_id_t table_id_;
+    std::vector<std::size_t> indexes_;
+    BoundExpressionPtr predicate_;
+};
+
+class IndexScanPlan final : public PlanNode {
+public:
+    IndexScanPlan(table_id_t table_id, index_id_t index_id, std::int64_t key,
+                  std::vector<std::size_t> indexes, Schema output_schema,
+                  BoundExpressionPtr predicate)
+        : PlanNode(PlanType::IndexScan, std::move(output_schema)), table_id_(table_id),
+          index_id_(index_id), key_(key), indexes_(std::move(indexes)),
+          predicate_(std::move(predicate)) {}
+    table_id_t GetTableId() const { return table_id_; }
+    index_id_t GetIndexId() const { return index_id_; }
+    std::int64_t GetKey() const { return key_; }
+    const std::vector<std::size_t>& GetColumnIndexes() const { return indexes_; }
+    const BoundExpressionPtr& GetPredicate() const { return predicate_; }
+
+private:
+    table_id_t table_id_;
+    index_id_t index_id_;
+    std::int64_t key_;
     std::vector<std::size_t> indexes_;
     BoundExpressionPtr predicate_;
 };

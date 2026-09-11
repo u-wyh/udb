@@ -70,6 +70,41 @@ struct IndexChange {
     std::optional<std::int64_t> new_key;
 };
 
+void CheckScan(const Schema& source, const Schema& output,
+               const std::vector<std::size_t>& indexes,
+               const BoundExpressionPtr& predicate) {
+    if (indexes.size() != output.GetColumnCount()) {
+        throw std::invalid_argument("Plan projection size mismatch");
+    }
+    for (std::size_t i = 0; i < indexes.size(); ++i) {
+        if (indexes[i] >= source.GetColumnCount() ||
+            !SameColumn(source.GetColumn(indexes[i]), output.GetColumn(i))) {
+            throw std::invalid_argument("Plan projection does not match catalog");
+        }
+    }
+    if (predicate && predicate->type != TypeId::BOOLEAN) {
+        throw std::invalid_argument("Plan predicate must be BOOLEAN");
+    }
+    CheckExpression(predicate, source);
+}
+
+bool Matches(const BoundExpressionPtr& predicate, const Tuple& tuple) {
+    if (!predicate) { return true; }
+    const auto value = EvaluateExpression(*predicate, tuple);
+    if (value.GetType() != TypeId::BOOLEAN) {
+        throw std::invalid_argument("Predicate did not evaluate to BOOLEAN");
+    }
+    return !value.IsNull() && value.GetBoolean();
+}
+
+Tuple Project(const Tuple& tuple, const Schema& output,
+              const std::vector<std::size_t>& indexes) {
+    std::vector<Value> values;
+    values.reserve(indexes.size());
+    for (const auto index : indexes) { values.push_back(tuple.GetValue(index)); }
+    return Tuple(output, std::move(values));
+}
+
 }  // namespace
 
 ExecutionResult Executor::Execute(const PlanNode& plan) {
@@ -122,36 +157,35 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             const auto& source = catalog_.GetTable(scan.GetTableId()).GetSchema();
             const auto& output = scan.GetOutputSchema();
             const auto& indexes = scan.GetColumnIndexes();
-            if (indexes.size() != output.GetColumnCount()) {
-                throw std::invalid_argument("Plan projection size mismatch");
-            }
-            for (std::size_t i = 0; i < indexes.size(); ++i) {
-                if (indexes[i] >= source.GetColumnCount() || !SameColumn(source.GetColumn(indexes[i]), output.GetColumn(i))) {
-                    throw std::invalid_argument("Plan projection does not match catalog");
-                }
-            }
             const auto& predicate = scan.GetPredicate();
-            if (predicate && predicate->type != TypeId::BOOLEAN) {
-                throw std::invalid_argument("Plan predicate must be BOOLEAN");
-            }
-            CheckExpression(predicate, source);
+            CheckScan(source, output, indexes, predicate);
             ExecutionResult result{PlanType::SeqScan};
             result.output_schema = output;
             const auto& heap = catalog_.GetTableHeap(scan.GetTableId());
             for (auto rid = heap.GetFirstRID(); rid; rid = heap.GetNextRID(*rid)) {
                 const auto tuple = Tuple::Deserialize(heap.GetRecord(*rid), source);
-                if (predicate) {
-                    const auto value = EvaluateExpression(*predicate, tuple);
-                    if (value.GetType() != TypeId::BOOLEAN) {
-                        throw std::invalid_argument("Predicate did not evaluate to BOOLEAN");
-                    }
-                    if (value.IsNull() || !value.GetBoolean()) { continue; }
-                }
-                std::vector<Value> values;
-                values.reserve(indexes.size());
-                for (const auto index : indexes) { values.push_back(tuple.GetValue(index)); }
-                result.rows.emplace_back(output, std::move(values));
+                if (Matches(predicate, tuple)) { result.rows.push_back(Project(tuple, output, indexes)); }
             }
+            return result;
+        }
+        case PlanType::IndexScan: {
+            const auto& scan = dynamic_cast<const IndexScanPlan&>(plan);
+            const auto& source = catalog_.GetTable(scan.GetTableId()).GetSchema();
+            const auto& output = scan.GetOutputSchema();
+            const auto& indexes = scan.GetColumnIndexes();
+            const auto& predicate = scan.GetPredicate();
+            CheckScan(source, output, indexes, predicate);
+            const auto& index = catalog_.GetIndex(scan.GetIndexId());
+            if (index.GetMetadata().GetTableId() != scan.GetTableId()) {
+                throw std::invalid_argument("Index scan target does not match catalog");
+            }
+            ExecutionResult result{PlanType::IndexScan};
+            result.output_schema = output;
+            const auto rid = index.GetTree().GetValue(scan.GetKey());
+            if (!rid) { return result; }
+            const auto tuple = Tuple::Deserialize(
+                catalog_.GetTableHeap(scan.GetTableId()).GetRecord(*rid), source);
+            if (Matches(predicate, tuple)) { result.rows.push_back(Project(tuple, output, indexes)); }
             return result;
         }
         case PlanType::Delete: {
