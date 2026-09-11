@@ -33,6 +33,18 @@ std::size_t FindColumn(const Schema& schema, const std::string& name) {
     throw BindError("Unknown column: " + name);
 }
 
+std::string AggregateName(AggregateType type, const std::optional<std::string>& column) {
+    const char* name = nullptr;
+    switch (type) {
+        case AggregateType::Count: name = "count"; break;
+        case AggregateType::Sum: name = "sum"; break;
+        case AggregateType::Min: name = "min"; break;
+        case AggregateType::Max: name = "max"; break;
+        case AggregateType::Avg: name = "avg"; break;
+    }
+    return std::string(name) + "(" + (column ? *column : "*") + ")";
+}
+
 std::optional<TypeId> InferType(const ExpressionPtr& expression, const Schema& schema) {
     if (!expression) { throw BindError("Missing expression"); }
     if (const auto* column = std::get_if<ColumnExpression>(&expression->node)) {
@@ -206,6 +218,42 @@ BoundInsertStatement Binder::BindStatement(const InsertStatement& statement) con
 BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) const {
     const auto& table = Lookup(statement.table_name);
     const auto& schema = table.GetSchema();
+    auto predicate = statement.predicate ? BindExpression(statement.predicate, schema, TypeId::BOOLEAN) : nullptr;
+    if (!statement.aggregates.empty()) {
+        if (statement.select_all || !statement.column_names.empty()) {
+            throw BindError("Cannot mix aggregate and regular projections");
+        }
+        if (!statement.order_by.empty()) {
+            throw BindError("ORDER BY aggregates is not supported yet");
+        }
+        std::vector<BoundAggregate> aggregates;
+        std::vector<Column> output_columns;
+        for (const auto& aggregate : statement.aggregates) {
+            std::optional<std::size_t> column_index;
+            TypeId input_type = TypeId::BOOLEAN;
+            std::uint32_t max_length = 0;
+            if (aggregate.column_name) {
+                column_index = FindColumn(schema, *aggregate.column_name);
+                const auto& column = schema.GetColumn(*column_index);
+                input_type = column.GetType();
+                max_length = column.GetMaxLength();
+            } else if (aggregate.type != AggregateType::Count) {
+                throw BindError("Only COUNT accepts *");
+            }
+            if ((aggregate.type == AggregateType::Sum || aggregate.type == AggregateType::Avg) &&
+                input_type != TypeId::INTEGER && input_type != TypeId::BIGINT) {
+                throw BindError("SUM and AVG require INTEGER or BIGINT");
+            }
+            const auto output_type = aggregate.type == AggregateType::Avg ? TypeId::DOUBLE :
+                (aggregate.type == AggregateType::Count || aggregate.type == AggregateType::Sum
+                    ? TypeId::BIGINT : input_type);
+            output_columns.emplace_back(AggregateName(aggregate.type, aggregate.column_name),
+                                        output_type, output_type == TypeId::VARCHAR ? max_length : 0);
+            aggregates.push_back({aggregate.type, column_index, input_type});
+        }
+        return {table.GetTableId(), table.GetTableName(), {}, Schema(std::move(output_columns)),
+                std::move(predicate), {}, statement.limit, statement.offset, std::move(aggregates)};
+    }
     std::vector<std::size_t> indexes;
     if (statement.select_all) {
         if (!statement.column_names.empty()) { throw BindError("SELECT cannot combine * with column names"); }
@@ -223,7 +271,6 @@ BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) con
     for (const auto index : indexes) { columns.push_back(schema.GetColumn(index)); }
     // Keep Schema's existing unique-name invariant. Repeated projections are
     // explicitly rejected for now instead of inventing output aliases.
-    auto predicate = statement.predicate ? BindExpression(statement.predicate, schema, TypeId::BOOLEAN) : nullptr;
     std::vector<BoundOrderBy> order_by;
     order_by.reserve(statement.order_by.size());
     for (const auto& order : statement.order_by) {
@@ -231,7 +278,7 @@ BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) con
     }
     return {table.GetTableId(), table.GetTableName(), std::move(indexes),
             Schema(std::move(columns)), std::move(predicate), std::move(order_by),
-            statement.limit, statement.offset};
+            statement.limit, statement.offset, {}};
 }
 
 BoundDeleteStatement Binder::BindStatement(const DeleteStatement& statement) const {

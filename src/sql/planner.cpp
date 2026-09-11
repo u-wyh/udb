@@ -144,6 +144,14 @@ std::unique_ptr<PlanNode> Build(const BoundInsertStatement& statement) {
 }
 
 std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement) {
+    if (!statement.aggregates.empty()) {
+        std::vector<PlanAggregate> aggregates;
+        for (const auto& aggregate : statement.aggregates) {
+            aggregates.push_back({aggregate.type, aggregate.column_index, aggregate.input_type});
+        }
+        return std::make_unique<AggregatePlan>(statement.table_id, std::move(aggregates),
+            statement.output_schema, statement.predicate, statement.limit, statement.offset);
+    }
     std::vector<PlanOrderBy> order_by;
     for (const auto& order : statement.order_by) {
         order_by.push_back({order.column_index, order.ascending});
@@ -155,6 +163,7 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement) {
 
 std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement,
                                 const Catalog& catalog) {
+    if (!statement.aggregates.empty()) { return Build(statement); }
     std::vector<PlanOrderBy> order_by;
     for (const auto& order : statement.order_by) {
         order_by.push_back({order.column_index, order.ascending});

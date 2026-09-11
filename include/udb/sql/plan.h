@@ -3,6 +3,7 @@
 #include "udb/table_metadata.h"
 #include "udb/index_metadata.h"
 #include "udb/sql/bound_expression.h"
+#include "udb/sql/aggregate.h"
 #include "udb/value.h"
 
 #include <memory>
@@ -12,7 +13,7 @@ namespace udb::sql {
 
 enum class PlanType {
     CreateTable, CreateIndex, DropTable, DropIndex, Insert, SeqScan, IndexScan,
-    IndexRangeScan, Delete, Update
+    IndexRangeScan, Aggregate, Delete, Update
 };
 
 struct PlanOrderBy {
@@ -193,6 +194,34 @@ private:
     std::vector<std::size_t> indexes_;
     BoundExpressionPtr predicate_;
     std::vector<PlanOrderBy> order_by_;
+    std::optional<std::size_t> limit_;
+    std::size_t offset_;
+};
+
+struct PlanAggregate {
+    AggregateType type;
+    std::optional<std::size_t> column_index;
+    TypeId input_type;
+};
+
+class AggregatePlan final : public PlanNode {
+public:
+    AggregatePlan(table_id_t table_id, std::vector<PlanAggregate> aggregates,
+                  Schema output_schema, BoundExpressionPtr predicate,
+                  std::optional<std::size_t> limit, std::size_t offset)
+        : PlanNode(PlanType::Aggregate, std::move(output_schema)), table_id_(table_id),
+          aggregates_(std::move(aggregates)), predicate_(std::move(predicate)),
+          limit_(limit), offset_(offset) {}
+    table_id_t GetTableId() const { return table_id_; }
+    const std::vector<PlanAggregate>& GetAggregates() const { return aggregates_; }
+    const BoundExpressionPtr& GetPredicate() const { return predicate_; }
+    const std::optional<std::size_t>& GetLimit() const { return limit_; }
+    std::size_t GetOffset() const { return offset_; }
+
+private:
+    table_id_t table_id_;
+    std::vector<PlanAggregate> aggregates_;
+    BoundExpressionPtr predicate_;
     std::optional<std::size_t> limit_;
     std::size_t offset_;
 };

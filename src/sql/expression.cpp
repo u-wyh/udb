@@ -16,6 +16,8 @@ int Compare(const Value& left, const Value& right) {
             return left.GetBigInt() < right.GetBigInt() ? -1 : left.GetBigInt() > right.GetBigInt() ? 1 : 0;
         case TypeId::VARCHAR:
             return left.GetVarchar() < right.GetVarchar() ? -1 : left.GetVarchar() > right.GetVarchar() ? 1 : 0;
+        case TypeId::DOUBLE:
+            return left.GetDouble() < right.GetDouble() ? -1 : left.GetDouble() > right.GetDouble() ? 1 : 0;
     }
     throw std::invalid_argument("Unknown comparison type");
 }

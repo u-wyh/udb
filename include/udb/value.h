@@ -14,6 +14,7 @@ public:
     static Value Integer(std::int32_t value) { return Value(TypeId::INTEGER, value); }
     static Value BigInt(std::int64_t value) { return Value(TypeId::BIGINT, value); }
     static Value Varchar(std::string value) { return Value(TypeId::VARCHAR, std::move(value)); }
+    static Value Double(double value) { return Value(TypeId::DOUBLE, value); }
     static Value Null(TypeId type) {
         ValidateType(type);
         return Value(type, std::monostate{});
@@ -25,6 +26,7 @@ public:
     std::int32_t GetInteger() const { Require(TypeId::INTEGER); return std::get<std::int32_t>(data_); }
     std::int64_t GetBigInt() const { Require(TypeId::BIGINT); return std::get<std::int64_t>(data_); }
     const std::string& GetVarchar() const { Require(TypeId::VARCHAR); return std::get<std::string>(data_); }
+    double GetDouble() const { Require(TypeId::DOUBLE); return std::get<double>(data_); }
 
     // Structural equality for tests, not SQL three-valued equality.
     // NULLs compare equal only when their declared types also match.
@@ -32,7 +34,7 @@ public:
     friend bool operator!=(const Value& a, const Value& b) { return !(a == b); }
 
 private:
-    using Data = std::variant<std::monostate, bool, std::int32_t, std::int64_t, std::string>;
+    using Data = std::variant<std::monostate, bool, std::int32_t, std::int64_t, std::string, double>;
     Value(TypeId type, Data data) : type_(type), data_(std::move(data)) {}
     void Require(TypeId type) const {
         if (type_ != type || IsNull()) {

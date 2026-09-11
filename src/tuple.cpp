@@ -1,5 +1,7 @@
 #include "udb/tuple.h"
 
+#include <cstring>
+
 namespace udb {
 namespace {
 
@@ -81,6 +83,13 @@ Record Tuple::Serialize(const Schema& schema) const {
                 bytes.insert(bytes.end(), text.begin(), text.end());
                 break;
             }
+            case TypeId::DOUBLE: {
+                std::uint64_t raw = 0;
+                const auto number = value.GetDouble();
+                std::memcpy(&raw, &number, sizeof(raw));
+                Write(bytes, raw, 8);
+                break;
+            }
         }
     }
     return Record(bytes.data(), bytes.size());
@@ -132,6 +141,13 @@ Tuple Tuple::Deserialize(const Record& record, const Schema& schema) {
                     throw std::runtime_error("Tuple VARCHAR exceeds column byte limit");
                 }
                 values.push_back(Value::Varchar(reader.ReadString(static_cast<std::size_t>(size))));
+                break;
+            }
+            case TypeId::DOUBLE: {
+                const auto raw = reader.Read(8);
+                double number = 0;
+                std::memcpy(&number, &raw, sizeof(number));
+                values.push_back(Value::Double(number));
                 break;
             }
         }

@@ -1,6 +1,7 @@
 #include "udb/sql/executor.h"
 
 #include <algorithm>
+#include <limits>
 #include <map>
 
 namespace udb::sql {
@@ -116,6 +117,17 @@ bool ReachedLimit(const std::optional<std::size_t>& limit, std::size_t row_count
     return limit && row_count >= *limit;
 }
 
+bool ValueLess(const Value& left, const Value& right) {
+    switch (left.GetType()) {
+        case TypeId::BOOLEAN: return !left.GetBoolean() && right.GetBoolean();
+        case TypeId::INTEGER: return left.GetInteger() < right.GetInteger();
+        case TypeId::BIGINT: return left.GetBigInt() < right.GetBigInt();
+        case TypeId::VARCHAR: return left.GetVarchar() < right.GetVarchar();
+        case TypeId::DOUBLE: return left.GetDouble() < right.GetDouble();
+    }
+    throw std::invalid_argument("Unknown aggregate comparison type");
+}
+
 bool OrderLess(const Tuple& left, const Tuple& right,
                const std::vector<PlanOrderBy>& order_by) {
     for (const auto& order : order_by) {
@@ -143,6 +155,10 @@ bool OrderLess(const Tuple& left, const Tuple& right,
             case TypeId::VARCHAR:
                 less = a.GetVarchar() < b.GetVarchar();
                 greater = a.GetVarchar() > b.GetVarchar();
+                break;
+            case TypeId::DOUBLE:
+                less = a.GetDouble() < b.GetDouble();
+                greater = a.GetDouble() > b.GetDouble();
                 break;
         }
         if (less || greater) { return order.ascending ? less : greater; }
@@ -287,6 +303,89 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             }
             FinishScan(result, std::move(tuples), output, indexes,
                        scan.GetOrderBy(), scan.GetLimit(), scan.GetOffset());
+            return result;
+        }
+        case PlanType::Aggregate: {
+            const auto& aggregate = dynamic_cast<const AggregatePlan&>(plan);
+            const auto& source = catalog_.GetTable(aggregate.GetTableId()).GetSchema();
+            const auto& specs = aggregate.GetAggregates();
+            const auto& output = aggregate.GetOutputSchema();
+            if (specs.empty() || specs.size() != output.GetColumnCount()) {
+                throw std::invalid_argument("Invalid aggregate plan");
+            }
+            CheckExpression(aggregate.GetPredicate(), source);
+            std::vector<std::optional<Value>> values(specs.size());
+            std::vector<std::uint64_t> counts(specs.size(), 0);
+            std::vector<std::int64_t> sums(specs.size(), 0);
+            std::vector<long double> average_sums(specs.size(), 0);
+            const auto& heap = catalog_.GetTableHeap(aggregate.GetTableId());
+            for (auto rid = heap.GetFirstRID(); rid; rid = heap.GetNextRID(*rid)) {
+                const auto tuple = Tuple::Deserialize(heap.GetRecord(*rid), source);
+                if (!Matches(aggregate.GetPredicate(), tuple)) { continue; }
+                for (std::size_t i = 0; i < specs.size(); ++i) {
+                    const auto& spec = specs[i];
+                    if (!spec.column_index) {
+                        if (spec.type != AggregateType::Count) {
+                            throw std::invalid_argument("Invalid aggregate star argument");
+                        }
+                        ++counts[i];
+                        continue;
+                    }
+                    if (*spec.column_index >= source.GetColumnCount() ||
+                        source.GetColumn(*spec.column_index).GetType() != spec.input_type) {
+                        throw std::invalid_argument("Aggregate column does not match catalog");
+                    }
+                    const auto& value = tuple.GetValue(*spec.column_index);
+                    if (value.IsNull()) { continue; }
+                    ++counts[i];
+                    if (spec.type == AggregateType::Count) { continue; }
+                    if (spec.type == AggregateType::Sum) {
+                        const auto number = spec.input_type == TypeId::INTEGER
+                            ? static_cast<std::int64_t>(value.GetInteger()) : value.GetBigInt();
+                        if ((number > 0 && sums[i] > std::numeric_limits<std::int64_t>::max() - number) ||
+                            (number < 0 && sums[i] < std::numeric_limits<std::int64_t>::min() - number)) {
+                            throw std::overflow_error("SUM overflow");
+                        }
+                        sums[i] += number;
+                    } else if (spec.type == AggregateType::Avg) {
+                        average_sums[i] += spec.input_type == TypeId::INTEGER
+                            ? static_cast<long double>(value.GetInteger())
+                            : static_cast<long double>(value.GetBigInt());
+                    } else if (!values[i] ||
+                               (spec.type == AggregateType::Min && ValueLess(value, *values[i])) ||
+                               (spec.type == AggregateType::Max && ValueLess(*values[i], value))) {
+                        values[i] = value;
+                    }
+                }
+            }
+            std::vector<Value> row;
+            row.reserve(specs.size());
+            for (std::size_t i = 0; i < specs.size(); ++i) {
+                switch (specs[i].type) {
+                    case AggregateType::Count:
+                        if (counts[i] > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+                            throw std::overflow_error("COUNT overflow");
+                        }
+                        row.push_back(Value::BigInt(static_cast<std::int64_t>(counts[i])));
+                        break;
+                    case AggregateType::Sum:
+                        row.push_back(counts[i] == 0 ? Value::Null(TypeId::BIGINT) : Value::BigInt(sums[i]));
+                        break;
+                    case AggregateType::Avg:
+                        row.push_back(counts[i] == 0 ? Value::Null(TypeId::DOUBLE) :
+                            Value::Double(static_cast<double>(average_sums[i] / counts[i])));
+                        break;
+                    case AggregateType::Min:
+                    case AggregateType::Max:
+                        row.push_back(values[i].value_or(Value::Null(specs[i].input_type)));
+                        break;
+                }
+            }
+            ExecutionResult result{PlanType::Aggregate};
+            result.output_schema = output;
+            if (!ReachedLimit(aggregate.GetLimit(), 0) && aggregate.GetOffset() == 0) {
+                result.rows.emplace_back(output, std::move(row));
+            }
             return result;
         }
         case PlanType::Delete: {

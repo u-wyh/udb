@@ -16,6 +16,20 @@ std::int64_t IntegerValue(const Token& token) {
     return value;
 }
 
+std::optional<AggregateType> AggregateFunction(std::string name) {
+    for (auto& character : name) {
+        if (character >= 'a' && character <= 'z') {
+            character = static_cast<char>(character - 'a' + 'A');
+        }
+    }
+    if (name == "COUNT") { return AggregateType::Count; }
+    if (name == "SUM") { return AggregateType::Sum; }
+    if (name == "MIN") { return AggregateType::Min; }
+    if (name == "MAX") { return AggregateType::Max; }
+    if (name == "AVG") { return AggregateType::Avg; }
+    return std::nullopt;
+}
+
 }  // namespace
 
 Token Parser::Take(TokenType type, const char* expected) {
@@ -139,8 +153,29 @@ SelectStatement Parser::Select() {
     if (Match(TokenType::Star)) {
         statement.select_all = true;
     } else {
-        do { statement.column_names.push_back(Take(TokenType::Identifier, "column name").text); }
-        while (Match(TokenType::Comma));
+        do {
+            const auto token = Take(TokenType::Identifier, "column name or aggregate");
+            if (!Match(TokenType::LeftParen)) {
+                if (!statement.aggregates.empty()) {
+                    throw SqlError("Cannot mix aggregate and column projections", token.position);
+                }
+                statement.column_names.push_back(token.text);
+                continue;
+            }
+            const auto function = AggregateFunction(token.text);
+            if (!function) { throw SqlError("Unknown aggregate function", token.position); }
+            if (!statement.column_names.empty()) {
+                throw SqlError("Cannot mix aggregate and column projections", token.position);
+            }
+            AggregateExpression aggregate{*function, std::nullopt};
+            if (*function == AggregateType::Count && Match(TokenType::Star)) {
+                // COUNT(*) counts every matching row.
+            } else {
+                aggregate.column_name = Take(TokenType::Identifier, "aggregate column").text;
+            }
+            Take(TokenType::RightParen, ")");
+            statement.aggregates.push_back(std::move(aggregate));
+        } while (Match(TokenType::Comma));
     }
     Take(TokenType::From, "FROM");
     statement.table_name = Take(TokenType::Identifier, "table name").text;

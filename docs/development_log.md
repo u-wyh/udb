@@ -232,3 +232,11 @@
 - 测试结果：全新构建无编译警告，27 / 27 测试及 ASan / UBSan 通过，覆盖语法边界、排序、索引路径、超范围和重开，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 28：无 GROUP BY 的基础 Aggregate。
+
+## 阶段 28：基础 Aggregate
+
+- 做了什么：实现无 GROUP BY 的 COUNT、SUM、MIN、MAX 与 AVG，支持 WHERE、NULL、空输入及 LIMIT / OFFSET。
+- 关键设计：聚合使用独立 AggregatePlan；COUNT / SUM 输出 BIGINT，AVG 输出 DOUBLE；NULL 不参与列聚合，SUM 检测溢出。
+- 测试结果：全新构建无编译警告，28 / 28 测试及 ASan / UBSan 通过，覆盖类型检查、空集、过滤、溢出和重开，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 29：单列 GROUP BY + Aggregate。

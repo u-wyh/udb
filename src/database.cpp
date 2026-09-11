@@ -9,7 +9,7 @@ namespace {
 // v3: magic:u64, version:u32, table_count:u32, next_table_id:u64,
 //     free_page_count:u64, then that many free_page_id:u64 values.
 // Table: id:u64, name:(u32 length + bytes), first_page:u64, column_count:u32.
-// Column: name:(u32 length + bytes), type:u8 (0..3), max_length:u32.
+// Column: name:(u32 length + bytes), type:u8 (0..4), max_length:u32.
 // After tables: next_index_id:u64, index_count:u64, then Index entries:
 // id:u64, name:(u32 length + bytes), table_id:u64, column_index:u64, header_page_id:u64.
 // All integers are little-endian. No struct layouts or native string objects.
@@ -54,6 +54,7 @@ std::uint8_t EncodeType(TypeId type) {
         case TypeId::INTEGER: return 1;
         case TypeId::BIGINT: return 2;
         case TypeId::VARCHAR: return 3;
+        case TypeId::DOUBLE: return 4;
     }
     throw std::runtime_error("Unknown metadata TypeId");
 }
@@ -64,6 +65,7 @@ TypeId DecodeType(std::uint64_t type) {
         case 1: return TypeId::INTEGER;
         case 2: return TypeId::BIGINT;
         case 3: return TypeId::VARCHAR;
+        case 4: return TypeId::DOUBLE;
     }
     throw std::runtime_error("Unknown metadata TypeId");
 }

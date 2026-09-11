@@ -3,6 +3,7 @@
 #include "udb/table_metadata.h"
 #include "udb/index_metadata.h"
 #include "udb/sql/bound_expression.h"
+#include "udb/sql/aggregate.h"
 #include "udb/value.h"
 
 #include <variant>
@@ -43,6 +44,12 @@ struct BoundOrderBy {
     bool ascending;
 };
 
+struct BoundAggregate {
+    AggregateType type;
+    std::optional<std::size_t> column_index;
+    TypeId input_type;
+};
+
 struct BoundSelectStatement {
     table_id_t table_id;
     std::string table_name;
@@ -52,6 +59,7 @@ struct BoundSelectStatement {
     std::vector<BoundOrderBy> order_by;
     std::optional<std::size_t> limit;
     std::size_t offset = 0;
+    std::vector<BoundAggregate> aggregates;
 };
 
 struct BoundDeleteStatement {

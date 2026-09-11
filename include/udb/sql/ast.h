@@ -1,6 +1,7 @@
 #pragma once
 
 #include "udb/type_id.h"
+#include "udb/sql/aggregate.h"
 
 #include <memory>
 #include <optional>
@@ -74,6 +75,11 @@ struct OrderBy {
     bool ascending = true;
 };
 
+struct AggregateExpression {
+    AggregateType type;
+    std::optional<std::string> column_name;  // Empty only for COUNT(*).
+};
+
 struct SelectStatement {
     std::string table_name;
     bool select_all = false;
@@ -82,6 +88,7 @@ struct SelectStatement {
     std::vector<OrderBy> order_by;
     std::optional<std::size_t> limit;
     std::size_t offset = 0;
+    std::vector<AggregateExpression> aggregates;
 };
 
 struct DeleteStatement {
