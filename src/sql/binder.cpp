@@ -224,8 +224,13 @@ BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) con
     // Keep Schema's existing unique-name invariant. Repeated projections are
     // explicitly rejected for now instead of inventing output aliases.
     auto predicate = statement.predicate ? BindExpression(statement.predicate, schema, TypeId::BOOLEAN) : nullptr;
+    std::optional<BoundOrderBy> order_by;
+    if (statement.order_by) {
+        order_by = BoundOrderBy{FindColumn(schema, statement.order_by->column_name),
+                                statement.order_by->ascending};
+    }
     return {table.GetTableId(), table.GetTableName(), std::move(indexes),
-            Schema(std::move(columns)), std::move(predicate), statement.limit};
+            Schema(std::move(columns)), std::move(predicate), order_by, statement.limit};
 }
 
 BoundDeleteStatement Binder::BindStatement(const DeleteStatement& statement) const {

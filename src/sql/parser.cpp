@@ -145,6 +145,13 @@ SelectStatement Parser::Select() {
     Take(TokenType::From, "FROM");
     statement.table_name = Take(TokenType::Identifier, "table name").text;
     if (Match(TokenType::Where)) { statement.predicate = ParseExpression(); }
+    if (Match(TokenType::Order)) {
+        Take(TokenType::By, "BY");
+        OrderBy order{Take(TokenType::Identifier, "column name").text, true};
+        if (Match(TokenType::Desc)) { order.ascending = false; }
+        else { Match(TokenType::Asc); }
+        statement.order_by = std::move(order);
+    }
     if (Match(TokenType::Limit)) {
         const auto token = Take(TokenType::IntegerLiteral, "nonnegative LIMIT");
         const auto limit = IntegerValue(token);

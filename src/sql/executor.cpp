@@ -1,5 +1,6 @@
 #include "udb/sql/executor.h"
 
+#include <algorithm>
 #include <map>
 
 namespace udb::sql {
@@ -72,7 +73,8 @@ struct IndexChange {
 
 void CheckScan(const Schema& source, const Schema& output,
                const std::vector<std::size_t>& indexes,
-               const BoundExpressionPtr& predicate) {
+               const BoundExpressionPtr& predicate,
+               const std::optional<PlanOrderBy>& order_by) {
     if (indexes.size() != output.GetColumnCount()) {
         throw std::invalid_argument("Plan projection size mismatch");
     }
@@ -86,6 +88,9 @@ void CheckScan(const Schema& source, const Schema& output,
         throw std::invalid_argument("Plan predicate must be BOOLEAN");
     }
     CheckExpression(predicate, source);
+    if (order_by && order_by->column_index >= source.GetColumnCount()) {
+        throw std::invalid_argument("Plan ORDER BY column does not match catalog");
+    }
 }
 
 bool Matches(const BoundExpressionPtr& predicate, const Tuple& tuple) {
@@ -107,6 +112,50 @@ Tuple Project(const Tuple& tuple, const Schema& output,
 
 bool ReachedLimit(const std::optional<std::size_t>& limit, std::size_t row_count) {
     return limit && row_count >= *limit;
+}
+
+bool OrderLess(const Tuple& left, const Tuple& right, const PlanOrderBy& order_by) {
+    const auto& a = left.GetValue(order_by.column_index);
+    const auto& b = right.GetValue(order_by.column_index);
+    if (a.IsNull() || b.IsNull()) {
+        if (a.IsNull() && b.IsNull()) { return false; }
+        return !a.IsNull();  // NULLS LAST for both directions.
+    }
+    bool less = false;
+    bool greater = false;
+    switch (a.GetType()) {
+        case TypeId::BOOLEAN:
+            less = !a.GetBoolean() && b.GetBoolean();
+            greater = a.GetBoolean() && !b.GetBoolean();
+            break;
+        case TypeId::INTEGER:
+            less = a.GetInteger() < b.GetInteger();
+            greater = a.GetInteger() > b.GetInteger();
+            break;
+        case TypeId::BIGINT:
+            less = a.GetBigInt() < b.GetBigInt();
+            greater = a.GetBigInt() > b.GetBigInt();
+            break;
+        case TypeId::VARCHAR:
+            less = a.GetVarchar() < b.GetVarchar();
+            greater = a.GetVarchar() > b.GetVarchar();
+            break;
+    }
+    return order_by.ascending ? less : greater;
+}
+
+void FinishScan(ExecutionResult& result, std::vector<Tuple> tuples,
+                const Schema& output, const std::vector<std::size_t>& indexes,
+                const std::optional<PlanOrderBy>& order_by,
+                const std::optional<std::size_t>& limit) {
+    if (order_by) {
+        std::stable_sort(tuples.begin(), tuples.end(),
+            [&order_by](const Tuple& a, const Tuple& b) { return OrderLess(a, b, *order_by); });
+    }
+    for (const auto& tuple : tuples) {
+        if (ReachedLimit(limit, result.rows.size())) { break; }
+        result.rows.push_back(Project(tuple, output, indexes));
+    }
 }
 
 }  // namespace
@@ -167,18 +216,18 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             const auto& output = scan.GetOutputSchema();
             const auto& indexes = scan.GetColumnIndexes();
             const auto& predicate = scan.GetPredicate();
-            CheckScan(source, output, indexes, predicate);
+            CheckScan(source, output, indexes, predicate, scan.GetOrderBy());
             ExecutionResult result{PlanType::SeqScan};
             result.output_schema = output;
             if (ReachedLimit(scan.GetLimit(), 0)) { return result; }
+            std::vector<Tuple> tuples;
             const auto& heap = catalog_.GetTableHeap(scan.GetTableId());
             for (auto rid = heap.GetFirstRID(); rid; rid = heap.GetNextRID(*rid)) {
                 const auto tuple = Tuple::Deserialize(heap.GetRecord(*rid), source);
-                if (Matches(predicate, tuple)) {
-                    result.rows.push_back(Project(tuple, output, indexes));
-                    if (ReachedLimit(scan.GetLimit(), result.rows.size())) { break; }
-                }
+                if (Matches(predicate, tuple)) { tuples.push_back(tuple); }
             }
+            FinishScan(result, std::move(tuples), output, indexes,
+                       scan.GetOrderBy(), scan.GetLimit());
             return result;
         }
         case PlanType::IndexScan: {
@@ -187,7 +236,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             const auto& output = scan.GetOutputSchema();
             const auto& indexes = scan.GetColumnIndexes();
             const auto& predicate = scan.GetPredicate();
-            CheckScan(source, output, indexes, predicate);
+            CheckScan(source, output, indexes, predicate, scan.GetOrderBy());
             const auto& index = catalog_.GetIndex(scan.GetIndexId());
             if (index.GetMetadata().GetTableId() != scan.GetTableId()) {
                 throw std::invalid_argument("Index scan target does not match catalog");
@@ -199,7 +248,10 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             if (!rid) { return result; }
             const auto tuple = Tuple::Deserialize(
                 catalog_.GetTableHeap(scan.GetTableId()).GetRecord(*rid), source);
-            if (Matches(predicate, tuple)) { result.rows.push_back(Project(tuple, output, indexes)); }
+            std::vector<Tuple> tuples;
+            if (Matches(predicate, tuple)) { tuples.push_back(tuple); }
+            FinishScan(result, std::move(tuples), output, indexes,
+                       scan.GetOrderBy(), scan.GetLimit());
             return result;
         }
         case PlanType::IndexRangeScan: {
@@ -208,7 +260,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             const auto& output = scan.GetOutputSchema();
             const auto& indexes = scan.GetColumnIndexes();
             const auto& predicate = scan.GetPredicate();
-            CheckScan(source, output, indexes, predicate);
+            CheckScan(source, output, indexes, predicate, scan.GetOrderBy());
             const auto& index = catalog_.GetIndex(scan.GetIndexId());
             if (index.GetMetadata().GetTableId() != scan.GetTableId()) {
                 throw std::invalid_argument("Index range scan target does not match catalog");
@@ -219,15 +271,15 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             const auto entries = index.GetTree().ScanRange(
                 scan.GetLowerBound(), scan.IsLowerInclusive(),
                 scan.GetUpperBound(), scan.IsUpperInclusive());
+            std::vector<Tuple> tuples;
             const auto& heap = catalog_.GetTableHeap(scan.GetTableId());
             for (const auto& [key, rid] : entries) {
                 static_cast<void>(key);
                 const auto tuple = Tuple::Deserialize(heap.GetRecord(rid), source);
-                if (Matches(predicate, tuple)) {
-                    result.rows.push_back(Project(tuple, output, indexes));
-                    if (ReachedLimit(scan.GetLimit(), result.rows.size())) { break; }
-                }
+                if (Matches(predicate, tuple)) { tuples.push_back(tuple); }
             }
+            FinishScan(result, std::move(tuples), output, indexes,
+                       scan.GetOrderBy(), scan.GetLimit());
             return result;
         }
         case PlanType::Delete: {

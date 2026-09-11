@@ -144,13 +144,19 @@ std::unique_ptr<PlanNode> Build(const BoundInsertStatement& statement) {
 }
 
 std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement) {
+    const auto order_by = statement.order_by
+        ? std::optional<PlanOrderBy>({statement.order_by->column_index, statement.order_by->ascending})
+        : std::nullopt;
     return std::make_unique<SeqScanPlan>(statement.table_id, statement.column_indexes,
                                          statement.output_schema, statement.predicate,
-                                         statement.limit);
+                                         order_by, statement.limit);
 }
 
 std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement,
                                 const Catalog& catalog) {
+    const auto order_by = statement.order_by
+        ? std::optional<PlanOrderBy>({statement.order_by->column_index, statement.order_by->ascending})
+        : std::nullopt;
     std::vector<EqualityCandidate> candidates;
     CollectEqualityCandidates(statement.predicate, candidates);
     std::optional<index_id_t> selected_index;
@@ -170,7 +176,7 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement,
         return std::make_unique<IndexScanPlan>(statement.table_id, *selected_index,
                                                *selected_key, statement.column_indexes,
                                                statement.output_schema, statement.predicate,
-                                               statement.limit);
+                                               order_by, statement.limit);
     }
 
     std::map<std::size_t, RangeCandidate> ranges;
@@ -191,7 +197,7 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement,
         statement.table_id, *selected_index, selected_range->lower,
         selected_range->lower_inclusive, selected_range->upper,
         selected_range->upper_inclusive, statement.column_indexes,
-        statement.output_schema, statement.predicate, statement.limit);
+        statement.output_schema, statement.predicate, order_by, statement.limit);
 }
 
 std::unique_ptr<PlanNode> Build(const BoundDeleteStatement& statement) {

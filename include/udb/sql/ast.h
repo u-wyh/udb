@@ -69,11 +69,17 @@ struct InsertStatement {
     std::vector<Literal> values;
 };
 
+struct OrderBy {
+    std::string column_name;
+    bool ascending = true;
+};
+
 struct SelectStatement {
     std::string table_name;
     bool select_all = false;
     std::vector<std::string> column_names;
     ExpressionPtr predicate = nullptr;
+    std::optional<OrderBy> order_by;
     std::optional<std::size_t> limit;
 };
 

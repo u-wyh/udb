@@ -207,3 +207,12 @@
 - 当前限制：无 OFFSET、参数化 LIMIT 和 ORDER BY。
 - Commit：见 Git 历史
 - 下一步：阶段 25：SELECT ORDER BY。
+
+## 阶段 25：SELECT ORDER BY
+
+- 做了什么：为 SELECT 增加单列 ORDER BY ASC / DESC，并贯通 Parser、Binder、三类扫描 Plan 与 Executor。
+- 关键设计：采用稳定内存排序；ASC / DESC 均将 NULL 放在末尾；完整 predicate 过滤后排序，最后应用 LIMIT。
+- 测试结果：全新构建无编译警告，25 / 25 测试及 ASan / UBSan 通过，覆盖类型排序、稳定性、索引扫描、LIMIT 和重开，git diff --check 通过。
+- 当前限制：无多列排序、表达式排序和外部排序。
+- Commit：见 Git 历史
+- 下一步：阶段 26：ORDER BY 多列排序。
