@@ -61,6 +61,11 @@ struct SelectStatement {
     ExpressionPtr predicate = nullptr;
 };
 
-using Statement = std::variant<CreateTableStatement, InsertStatement, SelectStatement>;
+struct DeleteStatement {
+    std::string table_name;
+    ExpressionPtr predicate = nullptr;
+};
+
+using Statement = std::variant<CreateTableStatement, InsertStatement, SelectStatement, DeleteStatement>;
 
 }  // namespace udb::sql

@@ -29,6 +29,14 @@ struct BoundSelectStatement {
     BoundExpressionPtr predicate = nullptr;
 };
 
-using BoundStatement = std::variant<BoundCreateTableStatement, BoundInsertStatement, BoundSelectStatement>;
+struct BoundDeleteStatement {
+    table_id_t table_id;
+    std::string table_name;
+    Schema schema;
+    BoundExpressionPtr predicate = nullptr;
+};
+
+using BoundStatement = std::variant<BoundCreateTableStatement, BoundInsertStatement,
+                                    BoundSelectStatement, BoundDeleteStatement>;
 
 }  // namespace udb::sql

@@ -109,3 +109,11 @@
 - 测试结果：从零构建无警告，全部 13 个测试及 ASan/UBSan 通过，覆盖优先级、类型绑定、多页过滤和重开查询，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：DELETE。
+
+## 阶段 14：DELETE
+
+- 做了什么：实现 DELETE AST、绑定、计划与执行，支持可选 WHERE 和准确 affected rows。
+- 关键设计：完全复用 Bound Expression 与三值逻辑；先收集匹配 RID 再通过 TableHeap 删除；保持显式 Flush / Close 持久化语义。
+- 测试结果：从零构建无编译警告，全部 14 个测试及 ASan/UBSan 通过，覆盖跨页删除、RID 稳定性和重开恢复，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：UPDATE。

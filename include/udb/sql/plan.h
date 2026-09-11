@@ -8,7 +8,7 @@
 
 namespace udb::sql {
 
-enum class PlanType { CreateTable, Insert, SeqScan };
+enum class PlanType { CreateTable, Insert, SeqScan, Delete };
 
 // Logical descriptions only. All current plans are leaves with no children.
 class PlanNode {
@@ -67,6 +67,21 @@ public:
 private:
     table_id_t table_id_;
     std::vector<std::size_t> indexes_;
+    BoundExpressionPtr predicate_;
+};
+
+class DeletePlan final : public PlanNode {
+public:
+    DeletePlan(table_id_t id, Schema schema, BoundExpressionPtr predicate = nullptr)
+        : PlanNode(PlanType::Delete, Schema({})), table_id_(id),
+          schema_(std::move(schema)), predicate_(std::move(predicate)) {}
+    table_id_t GetTableId() const { return table_id_; }
+    const Schema& GetTableSchema() const { return schema_; }
+    const BoundExpressionPtr& GetPredicate() const { return predicate_; }
+
+private:
+    table_id_t table_id_;
+    Schema schema_;
     BoundExpressionPtr predicate_;
 };
 

@@ -22,6 +22,7 @@ private:
     BoundCreateTableStatement BindStatement(const CreateTableStatement& statement) const;
     BoundInsertStatement BindStatement(const InsertStatement& statement) const;
     BoundSelectStatement BindStatement(const SelectStatement& statement) const;
+    BoundDeleteStatement BindStatement(const DeleteStatement& statement) const;
     const TableMetadata& Lookup(const std::string& name) const;
 
     const Catalog& catalog_;

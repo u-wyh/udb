@@ -16,6 +16,10 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement) {
                                          statement.output_schema, statement.predicate);
 }
 
+std::unique_ptr<PlanNode> Build(const BoundDeleteStatement& statement) {
+    return std::make_unique<DeletePlan>(statement.table_id, statement.schema, statement.predicate);
+}
+
 }  // namespace
 
 std::unique_ptr<PlanNode> Planner::Plan(const BoundStatement& statement) {

@@ -18,6 +18,7 @@ private:
     CreateTableStatement CreateTable();
     InsertStatement Insert();
     SelectStatement Select();
+    DeleteStatement Delete();
     Literal ParseLiteral();
     ExpressionPtr ParseExpression();
     ExpressionPtr ParseOr();

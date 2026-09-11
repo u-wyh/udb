@@ -86,8 +86,12 @@ add_executable(udb_expression_test tests/expression_test.cpp)
 target_link_libraries(udb_expression_test PRIVATE udb_sql_engine)
 add_test(NAME expression COMMAND udb_expression_test)
 
+add_executable(udb_delete_test tests/delete_test.cpp)
+target_link_libraries(udb_delete_test PRIVATE udb_sql_engine)
+add_test(NAME delete COMMAND udb_delete_test)
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    foreach(target udb udb_storage udb_storage_test udb_buffer_pool_test udb_slotted_page_test udb_table_heap_test udb_types udb_tuple_test udb_catalog udb_catalog_test udb_database_test udb_sql udb_sql_test udb_binder udb_binder_test udb_planner udb_planner_test udb_executor udb_executor_test udb_sql_engine udb_sql_engine_test udb_expression_test)
+    foreach(target udb udb_storage udb_storage_test udb_buffer_pool_test udb_slotted_page_test udb_table_heap_test udb_types udb_tuple_test udb_catalog udb_catalog_test udb_database_test udb_sql udb_sql_test udb_binder udb_binder_test udb_planner udb_planner_test udb_executor udb_executor_test udb_sql_engine udb_sql_engine_test udb_expression_test udb_delete_test)
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
     endforeach()
 endif()

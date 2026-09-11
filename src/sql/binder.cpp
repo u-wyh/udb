@@ -194,4 +194,11 @@ BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) con
             Schema(std::move(columns)), std::move(predicate)};
 }
 
+BoundDeleteStatement Binder::BindStatement(const DeleteStatement& statement) const {
+    const auto& table = Lookup(statement.table_name);
+    const auto& schema = table.GetSchema();
+    auto predicate = statement.predicate ? BindExpression(statement.predicate, schema, TypeId::BOOLEAN) : nullptr;
+    return {table.GetTableId(), table.GetTableName(), schema, std::move(predicate)};
+}
+
 }  // namespace udb::sql

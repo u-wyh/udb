@@ -110,6 +110,34 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             }
             return result;
         }
+        case PlanType::Delete: {
+            const auto& deletion = dynamic_cast<const DeletePlan&>(plan);
+            const auto& source = catalog_.GetTable(deletion.GetTableId()).GetSchema();
+            CheckSchema(deletion.GetTableSchema(), source);
+            const auto& predicate = deletion.GetPredicate();
+            if (predicate && predicate->type != TypeId::BOOLEAN) {
+                throw std::invalid_argument("Plan predicate must be BOOLEAN");
+            }
+            CheckExpression(predicate, source);
+            auto& heap = catalog_.GetTableHeap(deletion.GetTableId());
+            std::vector<RID> matches;
+            for (auto rid = heap.GetFirstRID(); rid; rid = heap.GetNextRID(*rid)) {
+                bool remove = !predicate;
+                if (predicate) {
+                    const auto tuple = Tuple::Deserialize(heap.GetRecord(*rid), source);
+                    const auto value = EvaluateExpression(*predicate, tuple);
+                    if (value.GetType() != TypeId::BOOLEAN) {
+                        throw std::invalid_argument("Predicate did not evaluate to BOOLEAN");
+                    }
+                    remove = !value.IsNull() && value.GetBoolean();
+                }
+                if (remove) { matches.push_back(*rid); }
+            }
+            for (const auto rid : matches) { heap.DeleteRecord(rid); }
+            ExecutionResult result{PlanType::Delete};
+            result.affected_rows = matches.size();
+            return result;
+        }
     }
     throw std::invalid_argument("Unsupported plan type");
 }

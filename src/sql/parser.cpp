@@ -38,7 +38,8 @@ Statement Parser::Parse(std::string_view input) {
         case TokenType::Create: statement = parser.CreateTable(); break;
         case TokenType::Insert: statement = parser.Insert(); break;
         case TokenType::Select: statement = parser.Select(); break;
-        default: throw SqlError("Expected CREATE, INSERT or SELECT", parser.current_.position);
+        case TokenType::Delete: statement = parser.Delete(); break;
+        default: throw SqlError("Expected CREATE, INSERT, SELECT or DELETE", parser.current_.position);
     }
     parser.Match(TokenType::Semicolon);
     parser.Take(TokenType::End, "end of input");
@@ -109,6 +110,15 @@ SelectStatement Parser::Select() {
         while (Match(TokenType::Comma));
     }
     Take(TokenType::From, "FROM");
+    statement.table_name = Take(TokenType::Identifier, "table name").text;
+    if (Match(TokenType::Where)) { statement.predicate = ParseExpression(); }
+    return statement;
+}
+
+DeleteStatement Parser::Delete() {
+    Take(TokenType::Delete, "DELETE");
+    Take(TokenType::From, "FROM");
+    DeleteStatement statement;
     statement.table_name = Take(TokenType::Identifier, "table name").text;
     if (Match(TokenType::Where)) { statement.predicate = ParseExpression(); }
     return statement;
