@@ -47,13 +47,15 @@ std::string AggregateText(AggregateType type, const std::optional<std::string>& 
 Token Parser::Take(TokenType type, const char* expected) {
     if (current_.type != type) { throw SqlError(std::string("Expected ") + expected, current_.position); }
     auto token = current_;
-    current_ = lexer_.Next();
+    current_ = std::move(next_);
+    next_ = lexer_.Next();
     return token;
 }
 
 bool Parser::Match(TokenType type) {
     if (current_.type != type) { return false; }
-    current_ = lexer_.Next();
+    current_ = std::move(next_);
+    next_ = lexer_.Next();
     return true;
 }
 
@@ -137,6 +139,13 @@ DropIndexStatement Parser::DropIndex() {
 }
 
 Literal Parser::ParseLiteral() {
+    if (current_.type == TokenType::Minus) {
+        const auto minus = Take(TokenType::Minus, "-");
+        auto token = Take(TokenType::IntegerLiteral, "integer");
+        token.text.insert(token.text.begin(), '-');
+        token.position = minus.position;
+        return IntegerValue(token);
+    }
     switch (current_.type) {
         case TokenType::IntegerLiteral: return IntegerValue(Take(TokenType::IntegerLiteral, "integer"));
         case TokenType::StringLiteral: return Take(TokenType::StringLiteral, "string").text;
@@ -166,24 +175,44 @@ SelectStatement Parser::Select() {
         statement.select_all = true;
     } else {
         do {
-            const auto token = Take(TokenType::Identifier, "column name or aggregate");
-            if (!Match(TokenType::LeftParen)) {
-                if (!statement.aggregates.empty()) {
-                    throw SqlError("GROUP BY column must precede aggregates", token.position);
+            const auto function = current_.type == TokenType::Identifier &&
+                                  next_.type == TokenType::LeftParen
+                ? AggregateFunction(current_.text) : std::nullopt;
+            if (function) {
+                const auto token = Take(TokenType::Identifier, "aggregate");
+                if (!statement.projections.empty()) {
+                    throw SqlError("Cannot mix aggregate and expression projections", token.position);
                 }
-                statement.column_names.push_back(token.text);
-                continue;
-            }
-            const auto function = AggregateFunction(token.text);
-            if (!function) { throw SqlError("Unknown aggregate function", token.position); }
-            AggregateExpression aggregate{*function, std::nullopt};
-            if (*function == AggregateType::Count && Match(TokenType::Star)) {
-                // COUNT(*) counts every matching row.
+                Take(TokenType::LeftParen, "(");
+                AggregateExpression aggregate{*function, std::nullopt};
+                if (*function == AggregateType::Count && Match(TokenType::Star)) {
+                    // COUNT(*) counts every matching row.
+                } else {
+                    aggregate.column_name = Take(TokenType::Identifier, "aggregate column").text;
+                }
+                Take(TokenType::RightParen, ")");
+                statement.aggregates.push_back(std::move(aggregate));
             } else {
-                aggregate.column_name = Take(TokenType::Identifier, "aggregate column").text;
+                if (!statement.aggregates.empty()) {
+                    throw SqlError("GROUP BY column must precede aggregates", current_.position);
+                }
+                auto expression = ParseExpression();
+                std::optional<std::string> alias;
+                if (Match(TokenType::As)) { alias = Take(TokenType::Identifier, "alias").text; }
+                const auto* column = std::get_if<ColumnExpression>(&expression->node);
+                if (column && !alias && statement.projections.empty()) {
+                    statement.column_names.push_back(column->name);
+                } else {
+                    if (statement.projections.empty()) {
+                        for (const auto& name : statement.column_names) {
+                            statement.projections.push_back({
+                                std::make_shared<Expression>(ColumnExpression{name}), std::nullopt});
+                        }
+                        statement.column_names.clear();
+                    }
+                    statement.projections.push_back({std::move(expression), std::move(alias)});
+                }
             }
-            Take(TokenType::RightParen, ")");
-            statement.aggregates.push_back(std::move(aggregate));
         } while (Match(TokenType::Comma));
     }
     Take(TokenType::From, "FROM");
@@ -275,7 +304,7 @@ ExpressionPtr Parser::ParseNot() {
 }
 
 ExpressionPtr Parser::ParseComparison() {
-    auto left = ParsePrimary();
+    auto left = ParseAdditive();
     ComparisonOperator op;
     if (Match(TokenType::Equal)) { op = ComparisonOperator::Equal; }
     else if (Match(TokenType::NotEqual)) { op = ComparisonOperator::NotEqual; }
@@ -284,7 +313,27 @@ ExpressionPtr Parser::ParseComparison() {
     else if (Match(TokenType::Greater)) { op = ComparisonOperator::Greater; }
     else if (Match(TokenType::GreaterEqual)) { op = ComparisonOperator::GreaterEqual; }
     else { return left; }
-    return std::make_shared<Expression>(ComparisonExpression{op, left, ParsePrimary()});
+    return std::make_shared<Expression>(ComparisonExpression{op, left, ParseAdditive()});
+}
+
+ExpressionPtr Parser::ParseAdditive() {
+    auto left = ParseMultiplicative();
+    while (current_.type == TokenType::Plus || current_.type == TokenType::Minus) {
+        const auto op = Match(TokenType::Plus) ? ArithmeticOperator::Add : ArithmeticOperator::Subtract;
+        if (op == ArithmeticOperator::Subtract) { Take(TokenType::Minus, "-"); }
+        left = std::make_shared<Expression>(ArithmeticExpression{op, left, ParseMultiplicative()});
+    }
+    return left;
+}
+
+ExpressionPtr Parser::ParseMultiplicative() {
+    auto left = ParsePrimary();
+    while (current_.type == TokenType::Star || current_.type == TokenType::Slash) {
+        const auto op = Match(TokenType::Star) ? ArithmeticOperator::Multiply : ArithmeticOperator::Divide;
+        if (op == ArithmeticOperator::Divide) { Take(TokenType::Slash, "/"); }
+        left = std::make_shared<Expression>(ArithmeticExpression{op, left, ParsePrimary()});
+    }
+    return left;
 }
 
 ExpressionPtr Parser::ParsePrimary() {
@@ -309,7 +358,8 @@ ExpressionPtr Parser::ParsePrimary() {
         Take(TokenType::RightParen, ")");
         return std::make_shared<Expression>(ColumnExpression{AggregateText(*function, column)});
     }
-    if (current_.type == TokenType::IntegerLiteral || current_.type == TokenType::StringLiteral ||
+    if (current_.type == TokenType::Minus || current_.type == TokenType::IntegerLiteral ||
+        current_.type == TokenType::StringLiteral ||
         current_.type == TokenType::True || current_.type == TokenType::False || current_.type == TokenType::Null) {
         return std::make_shared<Expression>(LiteralExpression{ParseLiteral()});
     }

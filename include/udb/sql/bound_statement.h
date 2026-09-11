@@ -63,6 +63,7 @@ struct BoundSelectStatement {
     std::optional<std::size_t> group_by_column;
     bool project_group_by = false;
     BoundExpressionPtr having = nullptr;
+    std::vector<BoundExpressionPtr> projections;
 };
 
 struct BoundDeleteStatement {

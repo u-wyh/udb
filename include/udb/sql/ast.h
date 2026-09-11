@@ -42,6 +42,7 @@ using Literal = std::variant<std::monostate, std::int64_t, std::string, bool>;
 
 enum class ComparisonOperator { Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual };
 enum class LogicalOperator { And, Or, Not };
+enum class ArithmeticOperator { Add, Subtract, Multiply, Divide };
 
 struct Expression;
 using ExpressionPtr = std::shared_ptr<const Expression>;
@@ -58,9 +59,15 @@ struct LogicalExpression {
     ExpressionPtr left;
     ExpressionPtr right;  // Empty only for NOT.
 };
+struct ArithmeticExpression {
+    ArithmeticOperator op;
+    ExpressionPtr left;
+    ExpressionPtr right;
+};
 
 struct Expression {
-    using Node = std::variant<ColumnExpression, LiteralExpression, ComparisonExpression, LogicalExpression>;
+    using Node = std::variant<ColumnExpression, LiteralExpression, ComparisonExpression,
+                              LogicalExpression, ArithmeticExpression>;
     explicit Expression(Node value) : node(std::move(value)) {}
     Node node;
 };
@@ -80,6 +87,11 @@ struct AggregateExpression {
     std::optional<std::string> column_name;  // Empty only for COUNT(*).
 };
 
+struct SelectExpression {
+    ExpressionPtr expression;
+    std::optional<std::string> alias;
+};
+
 struct SelectStatement {
     std::string table_name;
     bool select_all = false;
@@ -91,6 +103,7 @@ struct SelectStatement {
     std::vector<AggregateExpression> aggregates;
     std::optional<std::string> group_by;
     ExpressionPtr having = nullptr;
+    std::vector<SelectExpression> projections;
 };
 
 struct DeleteStatement {

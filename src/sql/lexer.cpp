@@ -16,7 +16,7 @@ const std::unordered_map<std::string, TokenType> kKeywords = {
     {"SELECT", TokenType::Select}, {"DELETE", TokenType::Delete},
     {"UPDATE", TokenType::Update}, {"SET", TokenType::Set},
     {"FROM", TokenType::From}, {"WHERE", TokenType::Where},
-    {"GROUP", TokenType::Group}, {"HAVING", TokenType::Having},
+    {"GROUP", TokenType::Group}, {"HAVING", TokenType::Having}, {"AS", TokenType::As},
     {"ORDER", TokenType::Order}, {"BY", TokenType::By},
     {"ASC", TokenType::Asc}, {"DESC", TokenType::Desc},
     {"LIMIT", TokenType::Limit}, {"OFFSET", TokenType::Offset},
@@ -59,7 +59,7 @@ Token Lexer::Next() {
         const auto keyword = kKeywords.find(uppercase);
         return {keyword == kKeywords.end() ? TokenType::Identifier : keyword->second, text, start};
     }
-    if (Digit(c) || (c == '-' && position_.offset < input_.size() && Digit(input_[position_.offset]))) {
+    if (Digit(c)) {
         while (position_.offset < input_.size() && Digit(input_[position_.offset])) { Advance(); }
         return {TokenType::IntegerLiteral, input_.substr(start.offset, position_.offset - start.offset), start};
     }
@@ -86,6 +86,9 @@ Token Lexer::Next() {
         case ',': return {TokenType::Comma, ",", start};
         case ';': return {TokenType::Semicolon, ";", start};
         case '*': return {TokenType::Star, "*", start};
+        case '+': return {TokenType::Plus, "+", start};
+        case '-': return {TokenType::Minus, "-", start};
+        case '/': return {TokenType::Slash, "/", start};
         case '=': return {TokenType::Equal, "=", start};
         case '!':
             if (position_.offset < input_.size() && input_[position_.offset] == '=') {

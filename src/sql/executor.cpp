@@ -46,6 +46,16 @@ void CheckExpression(const BoundExpressionPtr& expression, const Schema& source)
         CheckExpression(comparison->right, source);
         return;
     }
+    if (const auto* arithmetic = std::get_if<BoundArithmeticExpression>(&expression->node)) {
+        if (!arithmetic->left || !arithmetic->right ||
+            (expression->type != TypeId::INTEGER && expression->type != TypeId::BIGINT) ||
+            arithmetic->left->type != expression->type || arithmetic->right->type != expression->type) {
+            throw std::invalid_argument("Invalid plan arithmetic expression");
+        }
+        CheckExpression(arithmetic->left, source);
+        CheckExpression(arithmetic->right, source);
+        return;
+    }
     const auto& logical = std::get<BoundLogicalExpression>(expression->node);
     if (!logical.left || expression->type != TypeId::BOOLEAN || logical.left->type != TypeId::BOOLEAN ||
         (logical.op == LogicalOperator::Not ? static_cast<bool>(logical.right) :
@@ -75,11 +85,22 @@ struct IndexChange {
 void CheckScan(const Schema& source, const Schema& output,
                const std::vector<std::size_t>& indexes,
                const BoundExpressionPtr& predicate,
-               const std::vector<PlanOrderBy>& order_by) {
-    if (indexes.size() != output.GetColumnCount()) {
+               const std::vector<PlanOrderBy>& order_by,
+               const std::vector<BoundExpressionPtr>& projections) {
+    if (!projections.empty()) {
+        if (!indexes.empty() || projections.size() != output.GetColumnCount()) {
+            throw std::invalid_argument("Plan expression projection size mismatch");
+        }
+        for (std::size_t i = 0; i < projections.size(); ++i) {
+            CheckExpression(projections[i], source);
+            if (!projections[i] || projections[i]->type != output.GetColumn(i).GetType()) {
+                throw std::invalid_argument("Plan expression projection type mismatch");
+            }
+        }
+    } else if (indexes.size() != output.GetColumnCount()) {
         throw std::invalid_argument("Plan projection size mismatch");
     }
-    for (std::size_t i = 0; i < indexes.size(); ++i) {
+    for (std::size_t i = 0; projections.empty() && i < indexes.size(); ++i) {
         if (indexes[i] >= source.GetColumnCount() ||
             !SameColumn(source.GetColumn(indexes[i]), output.GetColumn(i))) {
             throw std::invalid_argument("Plan projection does not match catalog");
@@ -106,10 +127,17 @@ bool Matches(const BoundExpressionPtr& predicate, const Tuple& tuple) {
 }
 
 Tuple Project(const Tuple& tuple, const Schema& output,
-              const std::vector<std::size_t>& indexes) {
+              const std::vector<std::size_t>& indexes,
+              const std::vector<BoundExpressionPtr>& projections) {
     std::vector<Value> values;
-    values.reserve(indexes.size());
-    for (const auto index : indexes) { values.push_back(tuple.GetValue(index)); }
+    values.reserve(output.GetColumnCount());
+    if (!projections.empty()) {
+        for (const auto& expression : projections) {
+            values.push_back(EvaluateExpression(*expression, tuple));
+        }
+    } else {
+        for (const auto index : indexes) { values.push_back(tuple.GetValue(index)); }
+    }
     return Tuple(output, std::move(values));
 }
 
@@ -169,7 +197,8 @@ bool OrderLess(const Tuple& left, const Tuple& right,
 void FinishScan(ExecutionResult& result, std::vector<Tuple> tuples,
                 const Schema& output, const std::vector<std::size_t>& indexes,
                 const std::vector<PlanOrderBy>& order_by,
-                const std::optional<std::size_t>& limit, std::size_t offset) {
+                const std::optional<std::size_t>& limit, std::size_t offset,
+                const std::vector<BoundExpressionPtr>& projections) {
     if (!order_by.empty()) {
         std::stable_sort(tuples.begin(), tuples.end(),
             [&order_by](const Tuple& a, const Tuple& b) { return OrderLess(a, b, order_by); });
@@ -177,7 +206,7 @@ void FinishScan(ExecutionResult& result, std::vector<Tuple> tuples,
     for (std::size_t position = 0; position < tuples.size(); ++position) {
         if (position < offset) { continue; }
         if (ReachedLimit(limit, result.rows.size())) { break; }
-        result.rows.push_back(Project(tuples[position], output, indexes));
+        result.rows.push_back(Project(tuples[position], output, indexes, projections));
     }
 }
 
@@ -239,7 +268,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             const auto& output = scan.GetOutputSchema();
             const auto& indexes = scan.GetColumnIndexes();
             const auto& predicate = scan.GetPredicate();
-            CheckScan(source, output, indexes, predicate, scan.GetOrderBy());
+            CheckScan(source, output, indexes, predicate, scan.GetOrderBy(), scan.GetProjections());
             ExecutionResult result{PlanType::SeqScan};
             result.output_schema = output;
             if (ReachedLimit(scan.GetLimit(), 0)) { return result; }
@@ -250,7 +279,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
                 if (Matches(predicate, tuple)) { tuples.push_back(tuple); }
             }
             FinishScan(result, std::move(tuples), output, indexes,
-                       scan.GetOrderBy(), scan.GetLimit(), scan.GetOffset());
+                       scan.GetOrderBy(), scan.GetLimit(), scan.GetOffset(), scan.GetProjections());
             return result;
         }
         case PlanType::IndexScan: {
@@ -259,7 +288,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             const auto& output = scan.GetOutputSchema();
             const auto& indexes = scan.GetColumnIndexes();
             const auto& predicate = scan.GetPredicate();
-            CheckScan(source, output, indexes, predicate, scan.GetOrderBy());
+            CheckScan(source, output, indexes, predicate, scan.GetOrderBy(), scan.GetProjections());
             const auto& index = catalog_.GetIndex(scan.GetIndexId());
             if (index.GetMetadata().GetTableId() != scan.GetTableId()) {
                 throw std::invalid_argument("Index scan target does not match catalog");
@@ -274,7 +303,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             std::vector<Tuple> tuples;
             if (Matches(predicate, tuple)) { tuples.push_back(tuple); }
             FinishScan(result, std::move(tuples), output, indexes,
-                       scan.GetOrderBy(), scan.GetLimit(), scan.GetOffset());
+                       scan.GetOrderBy(), scan.GetLimit(), scan.GetOffset(), scan.GetProjections());
             return result;
         }
         case PlanType::IndexRangeScan: {
@@ -283,7 +312,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             const auto& output = scan.GetOutputSchema();
             const auto& indexes = scan.GetColumnIndexes();
             const auto& predicate = scan.GetPredicate();
-            CheckScan(source, output, indexes, predicate, scan.GetOrderBy());
+            CheckScan(source, output, indexes, predicate, scan.GetOrderBy(), scan.GetProjections());
             const auto& index = catalog_.GetIndex(scan.GetIndexId());
             if (index.GetMetadata().GetTableId() != scan.GetTableId()) {
                 throw std::invalid_argument("Index range scan target does not match catalog");
@@ -302,7 +331,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
                 if (Matches(predicate, tuple)) { tuples.push_back(tuple); }
             }
             FinishScan(result, std::move(tuples), output, indexes,
-                       scan.GetOrderBy(), scan.GetLimit(), scan.GetOffset());
+                       scan.GetOrderBy(), scan.GetLimit(), scan.GetOffset(), scan.GetProjections());
             return result;
         }
         case PlanType::Aggregate: {

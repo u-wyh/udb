@@ -25,10 +25,10 @@ private:
 
 enum class TokenType {
     End, Identifier, IntegerLiteral, StringLiteral,
-    LeftParen, RightParen, Comma, Semicolon, Star,
+    LeftParen, RightParen, Comma, Semicolon, Star, Plus, Minus, Slash,
     Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
     Create, Drop, Table, Index, On, Insert, Into, Values, Select, Delete, Update, Set, From, Where,
-    Group, Having, Order, By, Asc, Desc, Limit, Offset,
+    Group, Having, Order, By, As, Asc, Desc, Limit, Offset,
     And, Or, Not,
     Integer, BigInt, Boolean, Varchar, True, False, Null
 };

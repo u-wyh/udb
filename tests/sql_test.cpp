@@ -38,7 +38,7 @@ void TestLexer() {
     Check(tokens.Next().text == "42", "Integer token text wrong");
     Check(tokens.Next().type == TokenType::Comma, "Missing comma");
     const auto negative = tokens.Next();
-    Check(negative.type == TokenType::IntegerLiteral && negative.text == "-7", "Signed integer token wrong");
+    Check(negative.type == TokenType::Minus && tokens.Next().text == "7", "Signed integer tokens wrong");
     Check(tokens.Next().type == TokenType::RightParen && tokens.Next().type == TokenType::Semicolon &&
           tokens.Next().type == TokenType::Star, "Punctuation mismatch");
     Check(tokens.Next().text == "It's OK" && tokens.Next().text.empty() && tokens.Next().text == "a\\b", "String decoding failed");
@@ -50,7 +50,7 @@ void TestLexer() {
     Check(quote.Next().text == "'", "Escaped quote failed");
     Lexer reserved_prefix("SELECTED _from from2");
     for (int i = 0; i < 3; ++i) { Check(reserved_prefix.Next().type == TokenType::Identifier, "Keyword prefix misclassified"); }
-    for (const auto input : {"@", "#", "\"name\"", "-", "'unterminated", "'''"}) {
+    for (const auto input : {"@", "#", "\"name\"", "'unterminated", "'''"}) {
         Reject([&] { Lexer lexer(input); lexer.Next(); });
     }
     Reject([] { Lexer lexer(std::string(1, '\0')); lexer.Next(); });

@@ -256,3 +256,11 @@
 - 测试结果：全新构建无编译警告，30 / 30 测试及 ASan / UBSan 通过，覆盖全局/分组聚合、DOUBLE、NULL、分页和重开，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 31：SELECT 表达式与别名。
+
+## 阶段 31：SELECT 表达式与别名
+
+- 做了什么：SELECT 支持列和字面量投影、AS 别名，以及 INTEGER / BIGINT 的 `+ - * /` 基础算术表达式。
+- 关键设计：算术遵循乘除优先级与括号；NULL 传播；除零和整数溢出明确报错；表达式投影复用现有 BoundExpression。
+- 测试结果：全新构建无编译警告，31 / 31 测试及 ASan / UBSan 通过，覆盖别名、优先级、过滤、索引路径、错误边界和重开，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 32：CROSS JOIN。

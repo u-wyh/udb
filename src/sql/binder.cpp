@@ -1,5 +1,6 @@
 #include "udb/sql/binder.h"
 
+#include <algorithm>
 #include <limits>
 #include <optional>
 
@@ -58,6 +59,18 @@ std::optional<TypeId> InferType(const ExpressionPtr& expression, const Schema& s
         }
         if (std::holds_alternative<std::string>(literal->value)) { return TypeId::VARCHAR; }
         return TypeId::BOOLEAN;
+    }
+    if (const auto* arithmetic = std::get_if<ArithmeticExpression>(&expression->node)) {
+        const auto left = InferType(arithmetic->left, schema);
+        const auto right = InferType(arithmetic->right, schema);
+        if (left && right && *left != *right) {
+            if ((*left == TypeId::INTEGER || *left == TypeId::BIGINT) &&
+                (*right == TypeId::INTEGER || *right == TypeId::BIGINT)) {
+                return TypeId::BIGINT;
+            }
+            return std::nullopt;
+        }
+        return left ? left : right;
     }
     return TypeId::BOOLEAN;
 }
@@ -125,6 +138,23 @@ BoundExpressionPtr BindExpression(const ExpressionPtr& expression, const Schema&
         if (left->type != right->type) { throw BindError("Comparison operands have incompatible types"); }
         return std::make_shared<BoundExpression>(TypeId::BOOLEAN,
             BoundComparisonExpression{comparison->op, std::move(left), std::move(right)});
+    }
+    if (const auto* arithmetic = std::get_if<ArithmeticExpression>(&expression->node)) {
+        const auto right_hint = InferType(arithmetic->right, schema);
+        const bool left_literal = std::holds_alternative<LiteralExpression>(arithmetic->left->node);
+        const bool right_literal = std::holds_alternative<LiteralExpression>(arithmetic->right->node);
+        auto left = BindExpression(arithmetic->left, schema,
+            left_literal ? right_hint : std::nullopt);
+        auto right = BindExpression(arithmetic->right, schema,
+            right_literal ? std::optional<TypeId>(left->type) : std::nullopt);
+        if (left->type != right->type ||
+            (left->type != TypeId::INTEGER && left->type != TypeId::BIGINT)) {
+            throw BindError("Arithmetic operands must have the same INTEGER or BIGINT type");
+        }
+        if (expected && *expected != left->type) { throw BindError("Arithmetic expression type mismatch"); }
+        const auto result_type = left->type;
+        return std::make_shared<BoundExpression>(result_type,
+            BoundArithmeticExpression{arithmetic->op, std::move(left), std::move(right)});
     }
     const auto& logical = std::get<LogicalExpression>(expression->node);
     if (expected && *expected != TypeId::BOOLEAN) { throw BindError("Logical expression must produce BOOLEAN"); }
@@ -268,10 +298,56 @@ BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) con
             ? BindExpression(statement.having, output_schema, TypeId::BOOLEAN) : nullptr;
         return {table.GetTableId(), table.GetTableName(), {}, std::move(output_schema),
                 std::move(predicate), {}, statement.limit, statement.offset,
-                std::move(aggregates), group_by_column, project_group_by, std::move(having)};
+                std::move(aggregates), group_by_column, project_group_by, std::move(having), {}};
     }
     if (statement.having) { throw BindError("HAVING requires aggregate projections"); }
     if (statement.group_by) { throw BindError("GROUP BY requires aggregate projections"); }
+    if (!statement.projections.empty()) {
+        if (statement.select_all || !statement.column_names.empty()) {
+            throw BindError("Invalid expression projection state");
+        }
+        std::vector<BoundExpressionPtr> projections;
+        std::vector<Column> columns;
+        for (const auto& projection : statement.projections) {
+            const bool untyped_null = projection.expression &&
+                std::holds_alternative<LiteralExpression>(projection.expression->node) &&
+                std::holds_alternative<std::monostate>(
+                    std::get<LiteralExpression>(projection.expression->node).value);
+            auto expression = BindExpression(projection.expression, schema,
+                untyped_null ? std::optional<TypeId>(TypeId::VARCHAR) : std::nullopt);
+            std::string name;
+            if (projection.alias) {
+                if (projection.alias->empty()) { throw BindError("Projection alias cannot be empty"); }
+                name = *projection.alias;
+            } else if (const auto* column = std::get_if<ColumnExpression>(&projection.expression->node)) {
+                name = column->name;
+            } else {
+                throw BindError("Non-column projection requires AS alias");
+            }
+            std::uint32_t max_length = 0;
+            if (expression->type == TypeId::VARCHAR) {
+                if (const auto* column = std::get_if<BoundColumnExpression>(&expression->node)) {
+                    max_length = schema.GetColumn(column->column_index).GetMaxLength();
+                } else {
+                    const auto& literal = std::get<BoundLiteralExpression>(expression->node).value;
+                    if (!literal.IsNull()) {
+                        const auto& value = literal.GetVarchar();
+                        if (value.size() > std::numeric_limits<std::uint32_t>::max()) {
+                            throw BindError("VARCHAR projection is too long");
+                        }
+                        max_length = static_cast<std::uint32_t>(std::max<std::size_t>(1, value.size()));
+                    } else {
+                        max_length = 1;
+                    }
+                }
+            }
+            columns.emplace_back(std::move(name), expression->type, max_length);
+            projections.push_back(std::move(expression));
+        }
+        return {table.GetTableId(), table.GetTableName(), {}, Schema(std::move(columns)),
+                std::move(predicate), {}, statement.limit, statement.offset, {},
+                std::nullopt, false, nullptr, std::move(projections)};
+    }
     std::vector<std::size_t> indexes;
     if (statement.select_all) {
         if (!statement.column_names.empty()) { throw BindError("SELECT cannot combine * with column names"); }
@@ -296,7 +372,7 @@ BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) con
     }
     return {table.GetTableId(), table.GetTableName(), std::move(indexes),
             Schema(std::move(columns)), std::move(predicate), std::move(order_by),
-            statement.limit, statement.offset, {}, std::nullopt, false, nullptr};
+            statement.limit, statement.offset, {}, std::nullopt, false, nullptr, {}};
 }
 
 BoundDeleteStatement Binder::BindStatement(const DeleteStatement& statement) const {

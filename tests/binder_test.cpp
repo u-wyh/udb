@@ -92,8 +92,8 @@ void TestBinding(const std::filesystem::path& path) {
                            "SELECT * FROM Users", "SELECT id, id FROM users"}) {
         Reject([&] { bind(sql); });
     }
-    Reject([&] { binder.Bind(SelectStatement{"users", false, {}, nullptr, {}, std::nullopt, 0, {}, std::nullopt, nullptr}); });
-    Reject([&] { binder.Bind(SelectStatement{"users", true, {"id"}, nullptr, {}, std::nullopt, 0, {}, std::nullopt, nullptr}); });
+    Reject([&] { binder.Bind(SelectStatement{"users", false, {}, nullptr, {}, std::nullopt, 0, {}, std::nullopt, nullptr, {}}); });
+    Reject([&] { binder.Bind(SelectStatement{"users", true, {"id"}, nullptr, {}, std::nullopt, 0, {}, std::nullopt, nullptr, {}}); });
     Check(catalog.ListTables() == before_tables && std::filesystem::file_size(path) == before_size && page->data[0] == 0,
           "Binder modified catalog or table pages");
     *page = saved;

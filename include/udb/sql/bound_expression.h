@@ -27,10 +27,16 @@ struct BoundLogicalExpression {
     BoundExpressionPtr left;
     BoundExpressionPtr right;
 };
+struct BoundArithmeticExpression {
+    ArithmeticOperator op;
+    BoundExpressionPtr left;
+    BoundExpressionPtr right;
+};
 
 struct BoundExpression {
     using Node = std::variant<BoundColumnExpression, BoundLiteralExpression,
-                              BoundComparisonExpression, BoundLogicalExpression>;
+                              BoundComparisonExpression, BoundLogicalExpression,
+                              BoundArithmeticExpression>;
     BoundExpression(TypeId result_type, Node value) : type(result_type), node(std::move(value)) {}
     TypeId type;
     Node node;
