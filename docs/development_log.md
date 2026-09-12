@@ -352,3 +352,11 @@
 - 测试结果：全新构建无警告，42 / 42 测试及 ASan / UBSan 通过，覆盖唯一/非唯一、范围、别名、重开与无表页读取，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 43：Statistics。
+
+## 阶段 43：Statistics
+
+- 做了什么：Catalog 可显式采集表行数及逐列 NULL、非 NULL、基数、最小值和最大值。
+- 关键设计：统计是按需生成的内存快照；DML 后由调用方重新分析；数据库重开后可从 TableHeap 重建，不修改持久化格式。
+- 测试结果：全新构建无警告，43 / 43 测试及 ASan / UBSan 通过，覆盖全部现有类型、空表、NULL、刷新和重开重建，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 44：Cost Model 基础。

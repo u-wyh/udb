@@ -3,6 +3,7 @@
 #include "udb/table_heap.h"
 #include "udb/table_metadata.h"
 #include "udb/index_metadata.h"
+#include "udb/statistics.h"
 
 #include <map>
 #include <memory>
@@ -33,6 +34,11 @@ public:
     const TableHeap& GetTableHeap(table_id_t id) const;
     const TableHeap& GetTableHeap(const std::string& name) const;
     std::vector<table_id_t> ListTables() const;  // Ascending ID order; snapshot.
+    const TableStatistics& AnalyzeTable(table_id_t id);
+    const TableStatistics& AnalyzeTable(const std::string& name);
+    bool HasTableStatistics(table_id_t id) const;
+    const TableStatistics& GetTableStatistics(table_id_t id) const;
+    const TableStatistics& GetTableStatistics(const std::string& name) const;
 
     // Builds before publishing; options select uniqueness. Any NULL component
     // skips the row. INTEGER/BIGINT/VARCHAR components preserve column order.
@@ -64,6 +70,7 @@ private:
             : heap(pool, saved.GetFirstPageId()), metadata(saved) {}
         TableHeap heap;
         TableMetadata metadata;
+        std::optional<TableStatistics> statistics;
     };
 
     BufferPoolManager& pool_;

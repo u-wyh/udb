@@ -3,8 +3,23 @@
 #include "udb/tuple.h"
 
 #include <limits>
+#include <algorithm>
 
 namespace udb {
+namespace {
+
+bool ValueLess(const Value& left, const Value& right) {
+    switch (left.GetType()) {
+        case TypeId::BOOLEAN: return !left.GetBoolean() && right.GetBoolean();
+        case TypeId::INTEGER: return left.GetInteger() < right.GetInteger();
+        case TypeId::BIGINT: return left.GetBigInt() < right.GetBigInt();
+        case TypeId::VARCHAR: return left.GetVarchar() < right.GetVarchar();
+        case TypeId::DOUBLE: return left.GetDouble() < right.GetDouble();
+    }
+    throw std::invalid_argument("Unknown statistics type");
+}
+
+}  // namespace
 
 void Catalog::RestoreTable(const TableMetadata& metadata) {
     if (tables_.count(metadata.GetTableId()) != 0) {
@@ -126,6 +141,57 @@ std::vector<table_id_t> Catalog::ListTables() const {
         ids.push_back(item.first);
     }
     return ids;
+}
+
+const TableStatistics& Catalog::AnalyzeTable(table_id_t id) {
+    auto& entry = *tables_.at(id);
+    const auto& schema = entry.metadata.GetSchema();
+    TableStatistics statistics;
+    statistics.columns.resize(schema.GetColumnCount());
+    std::vector<std::vector<Value>> distinct(schema.GetColumnCount());
+    for (auto rid = entry.heap.GetFirstRID(); rid; rid = entry.heap.GetNextRID(*rid)) {
+        const auto tuple = Tuple::Deserialize(entry.heap.GetRecord(*rid), schema);
+        ++statistics.row_count;
+        for (std::size_t column = 0; column < schema.GetColumnCount(); ++column) {
+            const auto& value = tuple.GetValue(column);
+            auto& column_statistics = statistics.columns[column];
+            if (value.IsNull()) { ++column_statistics.null_count; continue; }
+            ++column_statistics.non_null_count;
+            if (!column_statistics.minimum || ValueLess(value, *column_statistics.minimum)) {
+                column_statistics.minimum = value;
+            }
+            if (!column_statistics.maximum || ValueLess(*column_statistics.maximum, value)) {
+                column_statistics.maximum = value;
+            }
+            auto& values = distinct[column];
+            if (std::find(values.begin(), values.end(), value) == values.end()) {
+                values.push_back(value);
+            }
+        }
+    }
+    for (std::size_t column = 0; column < statistics.columns.size(); ++column) {
+        statistics.columns[column].distinct_count = distinct[column].size();
+    }
+    entry.statistics = std::move(statistics);
+    return *entry.statistics;
+}
+
+const TableStatistics& Catalog::AnalyzeTable(const std::string& name) {
+    return AnalyzeTable(GetTable(name).GetTableId());
+}
+
+bool Catalog::HasTableStatistics(table_id_t id) const {
+    return tables_.at(id)->statistics.has_value();
+}
+
+const TableStatistics& Catalog::GetTableStatistics(table_id_t id) const {
+    const auto& statistics = tables_.at(id)->statistics;
+    if (!statistics) { throw std::logic_error("Table has not been analyzed"); }
+    return *statistics;
+}
+
+const TableStatistics& Catalog::GetTableStatistics(const std::string& name) const {
+    return GetTableStatistics(GetTable(name).GetTableId());
 }
 
 const Index& Catalog::CreateIndex(const std::string& name, table_id_t table_id,
