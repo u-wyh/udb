@@ -13,7 +13,7 @@ namespace udb::sql {
 
 enum class PlanType {
     CreateTable, CreateIndex, DropTable, DropIndex, Insert, SeqScan, IndexScan,
-    IndexRangeScan, Aggregate, Delete, Update
+    IndexRangeScan, CrossJoin, Aggregate, Delete, Update
 };
 
 struct PlanOrderBy {
@@ -200,6 +200,38 @@ private:
     std::optional<std::int64_t> upper_;
     bool lower_inclusive_;
     bool upper_inclusive_;
+    std::vector<std::size_t> indexes_;
+    BoundExpressionPtr predicate_;
+    std::vector<PlanOrderBy> order_by_;
+    std::optional<std::size_t> limit_;
+    std::size_t offset_;
+    std::vector<BoundExpressionPtr> projections_;
+};
+
+class CrossJoinPlan final : public PlanNode {
+public:
+    CrossJoinPlan(table_id_t left_table_id, table_id_t right_table_id,
+                  std::vector<std::size_t> indexes, Schema output_schema,
+                  BoundExpressionPtr predicate, std::vector<PlanOrderBy> order_by,
+                  std::optional<std::size_t> limit, std::size_t offset,
+                  std::vector<BoundExpressionPtr> projections)
+        : PlanNode(PlanType::CrossJoin, std::move(output_schema)),
+          left_table_id_(left_table_id), right_table_id_(right_table_id),
+          indexes_(std::move(indexes)), predicate_(std::move(predicate)),
+          order_by_(std::move(order_by)), limit_(limit), offset_(offset),
+          projections_(std::move(projections)) {}
+    table_id_t GetLeftTableId() const { return left_table_id_; }
+    table_id_t GetRightTableId() const { return right_table_id_; }
+    const std::vector<std::size_t>& GetColumnIndexes() const { return indexes_; }
+    const BoundExpressionPtr& GetPredicate() const { return predicate_; }
+    const std::vector<PlanOrderBy>& GetOrderBy() const { return order_by_; }
+    const std::optional<std::size_t>& GetLimit() const { return limit_; }
+    std::size_t GetOffset() const { return offset_; }
+    const std::vector<BoundExpressionPtr>& GetProjections() const { return projections_; }
+
+private:
+    table_id_t left_table_id_;
+    table_id_t right_table_id_;
     std::vector<std::size_t> indexes_;
     BoundExpressionPtr predicate_;
     std::vector<PlanOrderBy> order_by_;

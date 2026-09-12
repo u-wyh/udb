@@ -104,6 +104,7 @@ struct SelectStatement {
     std::optional<std::string> group_by;
     ExpressionPtr having = nullptr;
     std::vector<SelectExpression> projections;
+    std::optional<std::string> cross_join_table;
 };
 
 struct DeleteStatement {

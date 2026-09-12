@@ -33,6 +33,7 @@ private:
     ExpressionPtr ParseAdditive();
     ExpressionPtr ParseMultiplicative();
     ExpressionPtr ParsePrimary();
+    std::string ParseColumnName();
 
     Lexer lexer_;
     Token current_;

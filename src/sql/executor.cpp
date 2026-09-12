@@ -11,6 +11,33 @@ bool SameColumn(const Column& a, const Column& b) {
     return a.GetName() == b.GetName() && a.GetType() == b.GetType() && a.GetMaxLength() == b.GetMaxLength();
 }
 
+Schema JoinSchema(const TableMetadata& left, const TableMetadata& right) {
+    std::vector<Column> columns;
+    for (const auto& column : left.GetSchema().GetColumns()) {
+        columns.emplace_back(left.GetTableName() + "." + column.GetName(),
+                             column.GetType(), column.GetMaxLength());
+    }
+    for (const auto& column : right.GetSchema().GetColumns()) {
+        columns.emplace_back(right.GetTableName() + "." + column.GetName(),
+                             column.GetType(), column.GetMaxLength());
+    }
+    return Schema(std::move(columns));
+}
+
+Tuple JoinTuples(const Tuple& left, const Schema& left_schema,
+                 const Tuple& right, const Schema& right_schema,
+                 const Schema& joined_schema) {
+    std::vector<Value> values;
+    values.reserve(joined_schema.GetColumnCount());
+    for (std::size_t i = 0; i < left_schema.GetColumnCount(); ++i) {
+        values.push_back(left.GetValue(i));
+    }
+    for (std::size_t i = 0; i < right_schema.GetColumnCount(); ++i) {
+        values.push_back(right.GetValue(i));
+    }
+    return Tuple(joined_schema, std::move(values));
+}
+
 void CheckSchema(const Schema& planned, const Schema& actual) {
     if (planned.GetColumnCount() != actual.GetColumnCount()) {
         throw std::invalid_argument("Plan target schema does not match catalog");
@@ -332,6 +359,37 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             }
             FinishScan(result, std::move(tuples), output, indexes,
                        scan.GetOrderBy(), scan.GetLimit(), scan.GetOffset(), scan.GetProjections());
+            return result;
+        }
+        case PlanType::CrossJoin: {
+            const auto& join = dynamic_cast<const CrossJoinPlan&>(plan);
+            const auto& left = catalog_.GetTable(join.GetLeftTableId());
+            const auto& right = catalog_.GetTable(join.GetRightTableId());
+            const auto source = JoinSchema(left, right);
+            const auto& output = join.GetOutputSchema();
+            CheckScan(source, output, join.GetColumnIndexes(), join.GetPredicate(),
+                      join.GetOrderBy(), join.GetProjections());
+            ExecutionResult result{PlanType::CrossJoin};
+            result.output_schema = output;
+            if (ReachedLimit(join.GetLimit(), 0)) { return result; }
+            std::vector<Tuple> tuples;
+            const auto& left_heap = catalog_.GetTableHeap(join.GetLeftTableId());
+            const auto& right_heap = catalog_.GetTableHeap(join.GetRightTableId());
+            for (auto left_rid = left_heap.GetFirstRID(); left_rid;
+                 left_rid = left_heap.GetNextRID(*left_rid)) {
+                const auto left_tuple = Tuple::Deserialize(
+                    left_heap.GetRecord(*left_rid), left.GetSchema());
+                for (auto right_rid = right_heap.GetFirstRID(); right_rid;
+                     right_rid = right_heap.GetNextRID(*right_rid)) {
+                    const auto right_tuple = Tuple::Deserialize(
+                        right_heap.GetRecord(*right_rid), right.GetSchema());
+                    auto tuple = JoinTuples(left_tuple, left.GetSchema(), right_tuple,
+                                            right.GetSchema(), source);
+                    if (Matches(join.GetPredicate(), tuple)) { tuples.push_back(std::move(tuple)); }
+                }
+            }
+            FinishScan(result, std::move(tuples), output, join.GetColumnIndexes(),
+                       join.GetOrderBy(), join.GetLimit(), join.GetOffset(), join.GetProjections());
             return result;
         }
         case PlanType::Aggregate: {

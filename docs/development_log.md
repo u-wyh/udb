@@ -264,3 +264,11 @@
 - 测试结果：全新构建无编译警告，31 / 31 测试及 ASan / UBSan 通过，覆盖别名、优先级、过滤、索引路径、错误边界和重开，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 32：CROSS JOIN。
+
+## 阶段 32：CROSS JOIN
+
+- 做了什么：支持两张表的 CROSS JOIN，以及限定列名、过滤、投影、排序和分页。
+- 关键设计：使用嵌套循环并复用 TableHeap；歧义列名明确报错；保持单 frame 可执行，不改变持久化格式。
+- 测试结果：干净构建无警告，32 / 32 测试及 ASan / UBSan 通过；覆盖重开和表达式排序，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 33：INNER JOIN。

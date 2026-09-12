@@ -217,6 +217,10 @@ SelectStatement Parser::Select() {
     }
     Take(TokenType::From, "FROM");
     statement.table_name = Take(TokenType::Identifier, "table name").text;
+    if (Match(TokenType::Cross)) {
+        Take(TokenType::Join, "JOIN");
+        statement.cross_join_table = Take(TokenType::Identifier, "table name").text;
+    }
     if (Match(TokenType::Where)) { statement.predicate = ParseExpression(); }
     if (Match(TokenType::Group)) {
         Take(TokenType::By, "BY");
@@ -226,7 +230,7 @@ SelectStatement Parser::Select() {
     if (Match(TokenType::Order)) {
         Take(TokenType::By, "BY");
         do {
-            OrderBy order{Take(TokenType::Identifier, "column name").text, true};
+            OrderBy order{ParseColumnName(), true};
             if (Match(TokenType::Desc)) { order.ascending = false; }
             else { Match(TokenType::Asc); }
             statement.order_by.push_back(std::move(order));
@@ -345,7 +349,11 @@ ExpressionPtr Parser::ParsePrimary() {
     if (current_.type == TokenType::Identifier) {
         const auto token = Take(TokenType::Identifier, "column");
         if (!Match(TokenType::LeftParen)) {
-            return std::make_shared<Expression>(ColumnExpression{token.text});
+            auto name = token.text;
+            if (Match(TokenType::Dot)) {
+                name += "." + Take(TokenType::Identifier, "column").text;
+            }
+            return std::make_shared<Expression>(ColumnExpression{std::move(name)});
         }
         const auto function = AggregateFunction(token.text);
         if (!function) { throw SqlError("Unknown aggregate function", token.position); }
@@ -364,6 +372,12 @@ ExpressionPtr Parser::ParsePrimary() {
         return std::make_shared<Expression>(LiteralExpression{ParseLiteral()});
     }
     throw SqlError("Expected expression", current_.position);
+}
+
+std::string Parser::ParseColumnName() {
+    auto name = Take(TokenType::Identifier, "column").text;
+    if (Match(TokenType::Dot)) { name += "." + Take(TokenType::Identifier, "column").text; }
+    return name;
 }
 
 }  // namespace udb::sql

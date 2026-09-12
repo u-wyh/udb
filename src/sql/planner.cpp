@@ -144,6 +144,15 @@ std::unique_ptr<PlanNode> Build(const BoundInsertStatement& statement) {
 }
 
 std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement) {
+    if (statement.second_table_id) {
+        std::vector<PlanOrderBy> order_by;
+        for (const auto& order : statement.order_by) {
+            order_by.push_back({order.column_index, order.ascending});
+        }
+        return std::make_unique<CrossJoinPlan>(statement.table_id, *statement.second_table_id,
+            statement.column_indexes, statement.output_schema, statement.predicate,
+            std::move(order_by), statement.limit, statement.offset, statement.projections);
+    }
     if (!statement.aggregates.empty()) {
         std::vector<PlanAggregate> aggregates;
         for (const auto& aggregate : statement.aggregates) {
@@ -165,6 +174,7 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement) {
 
 std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement,
                                 const Catalog& catalog) {
+    if (statement.second_table_id) { return Build(statement); }
     if (!statement.aggregates.empty()) { return Build(statement); }
     std::vector<PlanOrderBy> order_by;
     for (const auto& order : statement.order_by) {

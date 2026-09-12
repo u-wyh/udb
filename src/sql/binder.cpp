@@ -31,7 +31,32 @@ std::size_t FindColumn(const Schema& schema, const std::string& name) {
     for (std::size_t i = 0; i < schema.GetColumnCount(); ++i) {
         if (schema.GetColumn(i).GetName() == name) { return i; }
     }
+    if (name.find('.') == std::string::npos) {
+        std::optional<std::size_t> found;
+        for (std::size_t i = 0; i < schema.GetColumnCount(); ++i) {
+            const auto& candidate = schema.GetColumn(i).GetName();
+            const auto dot = candidate.rfind('.');
+            if (dot != std::string::npos && candidate.substr(dot + 1) == name) {
+                if (found) { throw BindError("Ambiguous column: " + name); }
+                found = i;
+            }
+        }
+        if (found) { return *found; }
+    }
     throw BindError("Unknown column: " + name);
+}
+
+Schema JoinSchema(const std::string& left_name, const Schema& left,
+                  const std::string& right_name, const Schema& right) {
+    std::vector<Column> columns;
+    columns.reserve(left.GetColumnCount() + right.GetColumnCount());
+    for (const auto& column : left.GetColumns()) {
+        columns.emplace_back(left_name + "." + column.GetName(), column.GetType(), column.GetMaxLength());
+    }
+    for (const auto& column : right.GetColumns()) {
+        columns.emplace_back(right_name + "." + column.GetName(), column.GetType(), column.GetMaxLength());
+    }
+    return Schema(std::move(columns));
 }
 
 std::string AggregateName(AggregateType type, const std::optional<std::string>& column) {
@@ -248,7 +273,22 @@ BoundInsertStatement Binder::BindStatement(const InsertStatement& statement) con
 
 BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) const {
     const auto& table = Lookup(statement.table_name);
-    const auto& schema = table.GetSchema();
+    Schema schema = table.GetSchema();
+    std::optional<table_id_t> second_table_id;
+    std::optional<std::string> second_table_name;
+    if (statement.cross_join_table) {
+        const auto& second = Lookup(*statement.cross_join_table);
+        if (second.GetTableId() == table.GetTableId()) {
+            throw BindError("CROSS JOIN requires two distinct table names");
+        }
+        schema = JoinSchema(table.GetTableName(), table.GetSchema(),
+                            second.GetTableName(), second.GetSchema());
+        second_table_id = second.GetTableId();
+        second_table_name = second.GetTableName();
+        if (!statement.aggregates.empty()) {
+            throw BindError("Aggregates over CROSS JOIN are not supported yet");
+        }
+    }
     auto predicate = statement.predicate ? BindExpression(statement.predicate, schema, TypeId::BOOLEAN) : nullptr;
     if (!statement.aggregates.empty()) {
         if (statement.select_all) { throw BindError("Cannot combine * with aggregate projections"); }
@@ -298,7 +338,8 @@ BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) con
             ? BindExpression(statement.having, output_schema, TypeId::BOOLEAN) : nullptr;
         return {table.GetTableId(), table.GetTableName(), {}, std::move(output_schema),
                 std::move(predicate), {}, statement.limit, statement.offset,
-                std::move(aggregates), group_by_column, project_group_by, std::move(having), {}};
+                std::move(aggregates), group_by_column, project_group_by, std::move(having), {},
+                second_table_id, second_table_name};
     }
     if (statement.having) { throw BindError("HAVING requires aggregate projections"); }
     if (statement.group_by) { throw BindError("GROUP BY requires aggregate projections"); }
@@ -344,9 +385,14 @@ BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) con
             columns.emplace_back(std::move(name), expression->type, max_length);
             projections.push_back(std::move(expression));
         }
+        std::vector<BoundOrderBy> order_by;
+        for (const auto& order : statement.order_by) {
+            order_by.push_back({FindColumn(schema, order.column_name), order.ascending});
+        }
         return {table.GetTableId(), table.GetTableName(), {}, Schema(std::move(columns)),
-                std::move(predicate), {}, statement.limit, statement.offset, {},
-                std::nullopt, false, nullptr, std::move(projections)};
+                std::move(predicate), std::move(order_by), statement.limit, statement.offset, {},
+                std::nullopt, false, nullptr, std::move(projections),
+                second_table_id, second_table_name};
     }
     std::vector<std::size_t> indexes;
     if (statement.select_all) {
@@ -355,10 +401,7 @@ BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) con
     } else {
         if (statement.column_names.empty()) { throw BindError("SELECT requires a projection"); }
         for (const auto& name : statement.column_names) {
-            std::size_t index = 0;
-            while (index < schema.GetColumnCount() && schema.GetColumn(index).GetName() != name) { ++index; }
-            if (index == schema.GetColumnCount()) { throw BindError("Unknown column: " + name); }
-            indexes.push_back(index);
+            indexes.push_back(FindColumn(schema, name));
         }
     }
     std::vector<Column> columns;
@@ -372,7 +415,8 @@ BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) con
     }
     return {table.GetTableId(), table.GetTableName(), std::move(indexes),
             Schema(std::move(columns)), std::move(predicate), std::move(order_by),
-            statement.limit, statement.offset, {}, std::nullopt, false, nullptr, {}};
+            statement.limit, statement.offset, {}, std::nullopt, false, nullptr, {},
+            second_table_id, second_table_name};
 }
 
 BoundDeleteStatement Binder::BindStatement(const DeleteStatement& statement) const {

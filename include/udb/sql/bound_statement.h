@@ -64,6 +64,8 @@ struct BoundSelectStatement {
     bool project_group_by = false;
     BoundExpressionPtr having = nullptr;
     std::vector<BoundExpressionPtr> projections;
+    std::optional<table_id_t> second_table_id;
+    std::optional<std::string> second_table_name;
 };
 
 struct BoundDeleteStatement {
