@@ -149,9 +149,10 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement) {
         for (const auto& order : statement.order_by) {
             order_by.push_back({order.column_index, order.ascending});
         }
-        return std::make_unique<CrossJoinPlan>(statement.table_id, *statement.second_table_id,
+        return std::make_unique<JoinPlan>(statement.table_id, *statement.second_table_id,
             statement.column_indexes, statement.output_schema, statement.predicate,
-            std::move(order_by), statement.limit, statement.offset, statement.projections);
+            std::move(order_by), statement.limit, statement.offset, statement.projections,
+            statement.join_condition);
     }
     if (!statement.aggregates.empty()) {
         std::vector<PlanAggregate> aggregates;

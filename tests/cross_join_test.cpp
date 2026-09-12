@@ -24,7 +24,7 @@ void Reject(Function function) {
 void TestBindingAndPlanning(const std::filesystem::path& path) {
     const auto ast = std::get<SelectStatement>(Parser::Parse(
         "SELECT users.id, groups.label FROM users CROSS JOIN groups WHERE users.id = groups.id"));
-    Check(ast.cross_join_table == "groups" && ast.column_names.size() == 2 && ast.predicate,
+    Check(ast.joined_table == "groups" && ast.column_names.size() == 2 && ast.predicate,
           "CROSS JOIN AST is wrong");
 
     DiskManager disk(path);

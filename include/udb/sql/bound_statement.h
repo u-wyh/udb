@@ -66,6 +66,7 @@ struct BoundSelectStatement {
     std::vector<BoundExpressionPtr> projections;
     std::optional<table_id_t> second_table_id;
     std::optional<std::string> second_table_name;
+    BoundExpressionPtr join_condition = nullptr;
 };
 
 struct BoundDeleteStatement {

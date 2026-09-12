@@ -219,7 +219,13 @@ SelectStatement Parser::Select() {
     statement.table_name = Take(TokenType::Identifier, "table name").text;
     if (Match(TokenType::Cross)) {
         Take(TokenType::Join, "JOIN");
-        statement.cross_join_table = Take(TokenType::Identifier, "table name").text;
+        statement.joined_table = Take(TokenType::Identifier, "table name").text;
+    } else if (current_.type == TokenType::Inner || current_.type == TokenType::Join) {
+        Match(TokenType::Inner);
+        Take(TokenType::Join, "JOIN");
+        statement.joined_table = Take(TokenType::Identifier, "table name").text;
+        Take(TokenType::On, "ON");
+        statement.join_condition = ParseExpression();
     }
     if (Match(TokenType::Where)) { statement.predicate = ParseExpression(); }
     if (Match(TokenType::Group)) {

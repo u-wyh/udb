@@ -13,7 +13,7 @@ namespace udb::sql {
 
 enum class PlanType {
     CreateTable, CreateIndex, DropTable, DropIndex, Insert, SeqScan, IndexScan,
-    IndexRangeScan, CrossJoin, Aggregate, Delete, Update
+    IndexRangeScan, CrossJoin, NestedLoopJoin, Aggregate, Delete, Update
 };
 
 struct PlanOrderBy {
@@ -208,20 +208,22 @@ private:
     std::vector<BoundExpressionPtr> projections_;
 };
 
-class CrossJoinPlan final : public PlanNode {
+class JoinPlan final : public PlanNode {
 public:
-    CrossJoinPlan(table_id_t left_table_id, table_id_t right_table_id,
+    JoinPlan(table_id_t left_table_id, table_id_t right_table_id,
                   std::vector<std::size_t> indexes, Schema output_schema,
                   BoundExpressionPtr predicate, std::vector<PlanOrderBy> order_by,
                   std::optional<std::size_t> limit, std::size_t offset,
-                  std::vector<BoundExpressionPtr> projections)
-        : PlanNode(PlanType::CrossJoin, std::move(output_schema)),
+                  std::vector<BoundExpressionPtr> projections,
+                  BoundExpressionPtr join_condition = nullptr)
+        : PlanNode(join_condition ? PlanType::NestedLoopJoin : PlanType::CrossJoin, std::move(output_schema)),
           left_table_id_(left_table_id), right_table_id_(right_table_id),
           indexes_(std::move(indexes)), predicate_(std::move(predicate)),
           order_by_(std::move(order_by)), limit_(limit), offset_(offset),
-          projections_(std::move(projections)) {}
+          projections_(std::move(projections)), join_condition_(std::move(join_condition)) {}
     table_id_t GetLeftTableId() const { return left_table_id_; }
     table_id_t GetRightTableId() const { return right_table_id_; }
+    const BoundExpressionPtr& GetJoinCondition() const { return join_condition_; }
     const std::vector<std::size_t>& GetColumnIndexes() const { return indexes_; }
     const BoundExpressionPtr& GetPredicate() const { return predicate_; }
     const std::vector<PlanOrderBy>& GetOrderBy() const { return order_by_; }
@@ -238,7 +240,11 @@ private:
     std::optional<std::size_t> limit_;
     std::size_t offset_;
     std::vector<BoundExpressionPtr> projections_;
+    BoundExpressionPtr join_condition_;
 };
+
+using CrossJoinPlan = JoinPlan;
+using NestedLoopJoinPlan = JoinPlan;
 
 struct PlanAggregate {
     AggregateType type;

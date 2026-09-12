@@ -162,6 +162,13 @@ add_executable(udb_cross_join_test tests/cross_join_test.cpp)
 target_link_libraries(udb_cross_join_test PRIVATE udb_sql_engine)
 add_test(NAME cross_join COMMAND udb_cross_join_test)
 
+add_executable(udb_inner_join_test tests/inner_join_test.cpp)
+target_link_libraries(udb_inner_join_test PRIVATE udb_sql_engine)
+add_test(NAME inner_join COMMAND udb_inner_join_test)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(udb_inner_join_test PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     foreach(target udb udb_storage udb_storage_test udb_buffer_pool_test udb_slotted_page_test udb_table_heap_test udb_types udb_tuple_test udb_catalog udb_catalog_test udb_database_test udb_sql udb_sql_test udb_binder udb_binder_test udb_planner udb_planner_test udb_executor udb_executor_test udb_sql_engine udb_sql_engine_test udb_expression_test udb_delete_test udb_update_test udb_drop_table_test udb_free_page_test udb_b_plus_tree_test udb_create_index_test udb_index_maintenance_test udb_index_scan_test udb_range_scan_test udb_drop_index_test udb_limit_test udb_order_by_test udb_multi_order_by_test udb_offset_test udb_aggregate_test udb_group_by_test udb_having_test udb_select_expression_test udb_cross_join_test)
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)

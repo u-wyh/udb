@@ -14,7 +14,7 @@ const std::unordered_map<std::string, TokenType> kKeywords = {
     {"INDEX", TokenType::Index}, {"ON", TokenType::On},
     {"INSERT", TokenType::Insert}, {"INTO", TokenType::Into}, {"VALUES", TokenType::Values},
     {"SELECT", TokenType::Select}, {"DELETE", TokenType::Delete},
-    {"CROSS", TokenType::Cross}, {"JOIN", TokenType::Join},
+    {"CROSS", TokenType::Cross}, {"INNER", TokenType::Inner}, {"JOIN", TokenType::Join},
     {"UPDATE", TokenType::Update}, {"SET", TokenType::Set},
     {"FROM", TokenType::From}, {"WHERE", TokenType::Where},
     {"GROUP", TokenType::Group}, {"HAVING", TokenType::Having}, {"AS", TokenType::As},

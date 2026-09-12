@@ -276,20 +276,35 @@ BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) con
     Schema schema = table.GetSchema();
     std::optional<table_id_t> second_table_id;
     std::optional<std::string> second_table_name;
-    if (statement.cross_join_table) {
-        const auto& second = Lookup(*statement.cross_join_table);
+    if (statement.joined_table) {
+        const auto& second = Lookup(*statement.joined_table);
         if (second.GetTableId() == table.GetTableId()) {
-            throw BindError("CROSS JOIN requires two distinct table names");
+            throw BindError("JOIN requires two distinct table names");
         }
         schema = JoinSchema(table.GetTableName(), table.GetSchema(),
                             second.GetTableName(), second.GetSchema());
         second_table_id = second.GetTableId();
         second_table_name = second.GetTableName();
         if (!statement.aggregates.empty()) {
-            throw BindError("Aggregates over CROSS JOIN are not supported yet");
+            throw BindError("Aggregates over JOIN are not supported yet");
         }
     }
     auto predicate = statement.predicate ? BindExpression(statement.predicate, schema, TypeId::BOOLEAN) : nullptr;
+    BoundExpressionPtr join_condition;
+    if (statement.join_condition) {
+        if (!second_table_id) { throw BindError("ON requires a joined table"); }
+        join_condition = BindExpression(statement.join_condition, schema, TypeId::BOOLEAN);
+        const auto* comparison = std::get_if<BoundComparisonExpression>(&join_condition->node);
+        if (!comparison || comparison->op != ComparisonOperator::Equal) {
+            throw BindError("JOIN ON requires column equality");
+        }
+        const auto* left = std::get_if<BoundColumnExpression>(&comparison->left->node);
+        const auto* right = std::get_if<BoundColumnExpression>(&comparison->right->node);
+        const auto boundary = table.GetSchema().GetColumnCount();
+        if (!left || !right || (left->column_index < boundary) == (right->column_index < boundary)) {
+            throw BindError("JOIN ON must compare columns from opposite tables");
+        }
+    }
     if (!statement.aggregates.empty()) {
         if (statement.select_all) { throw BindError("Cannot combine * with aggregate projections"); }
         std::optional<std::size_t> group_by_column;
@@ -339,7 +354,7 @@ BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) con
         return {table.GetTableId(), table.GetTableName(), {}, std::move(output_schema),
                 std::move(predicate), {}, statement.limit, statement.offset,
                 std::move(aggregates), group_by_column, project_group_by, std::move(having), {},
-                second_table_id, second_table_name};
+                second_table_id, second_table_name, join_condition};
     }
     if (statement.having) { throw BindError("HAVING requires aggregate projections"); }
     if (statement.group_by) { throw BindError("GROUP BY requires aggregate projections"); }
@@ -392,7 +407,7 @@ BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) con
         return {table.GetTableId(), table.GetTableName(), {}, Schema(std::move(columns)),
                 std::move(predicate), std::move(order_by), statement.limit, statement.offset, {},
                 std::nullopt, false, nullptr, std::move(projections),
-                second_table_id, second_table_name};
+                second_table_id, second_table_name, join_condition};
     }
     std::vector<std::size_t> indexes;
     if (statement.select_all) {
@@ -416,7 +431,7 @@ BoundSelectStatement Binder::BindStatement(const SelectStatement& statement) con
     return {table.GetTableId(), table.GetTableName(), std::move(indexes),
             Schema(std::move(columns)), std::move(predicate), std::move(order_by),
             statement.limit, statement.offset, {}, std::nullopt, false, nullptr, {},
-            second_table_id, second_table_name};
+            second_table_id, second_table_name, join_condition};
 }
 
 BoundDeleteStatement Binder::BindStatement(const DeleteStatement& statement) const {

@@ -361,15 +361,17 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
                        scan.GetOrderBy(), scan.GetLimit(), scan.GetOffset(), scan.GetProjections());
             return result;
         }
-        case PlanType::CrossJoin: {
-            const auto& join = dynamic_cast<const CrossJoinPlan&>(plan);
+        case PlanType::CrossJoin:
+        case PlanType::NestedLoopJoin: {
+            const auto& join = dynamic_cast<const JoinPlan&>(plan);
             const auto& left = catalog_.GetTable(join.GetLeftTableId());
             const auto& right = catalog_.GetTable(join.GetRightTableId());
             const auto source = JoinSchema(left, right);
             const auto& output = join.GetOutputSchema();
             CheckScan(source, output, join.GetColumnIndexes(), join.GetPredicate(),
                       join.GetOrderBy(), join.GetProjections());
-            ExecutionResult result{PlanType::CrossJoin};
+            CheckExpression(join.GetJoinCondition(), source);
+            ExecutionResult result{plan.GetType()};
             result.output_schema = output;
             if (ReachedLimit(join.GetLimit(), 0)) { return result; }
             std::vector<Tuple> tuples;
@@ -385,7 +387,9 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
                         right_heap.GetRecord(*right_rid), right.GetSchema());
                     auto tuple = JoinTuples(left_tuple, left.GetSchema(), right_tuple,
                                             right.GetSchema(), source);
-                    if (Matches(join.GetPredicate(), tuple)) { tuples.push_back(std::move(tuple)); }
+                    if (Matches(join.GetJoinCondition(), tuple) && Matches(join.GetPredicate(), tuple)) {
+                        tuples.push_back(std::move(tuple));
+                    }
                 }
             }
             FinishScan(result, std::move(tuples), output, join.GetColumnIndexes(),

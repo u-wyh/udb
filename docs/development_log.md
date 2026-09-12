@@ -272,3 +272,11 @@
 - 测试结果：干净构建无警告，32 / 32 测试及 ASan / UBSan 通过；覆盖重开和表达式排序，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 33：INNER JOIN。
+
+## 阶段 33：INNER JOIN
+
+- 做了什么：支持 JOIN / INNER JOIN ... ON 的双表等值连接。
+- 关键设计：ON 绑定两表同类型列，独立保留 WHERE；嵌套循环复用 TableHeap，NULL 不匹配，重复键保留全部组合。
+- 测试结果：全新构建无警告，33 / 33 测试及 ASan / UBSan 通过，覆盖多页、单 frame、排序分页与重开；git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 34：Hash Join。
