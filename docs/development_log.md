@@ -360,3 +360,11 @@
 - 测试结果：全新构建无警告，43 / 43 测试及 ASan / UBSan 通过，覆盖全部现有类型、空表、NULL、刷新和重开重建，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 44：Cost Model 基础。
+
+## 阶段 44：Cost Model 基础
+
+- 做了什么：为 SeqScan、精确索引、范围索引和 Index-only Scan 提供粗粒度成本与结果量估算。
+- 关键设计：优先使用 Catalog 统计与索引唯一性；无统计时使用确定性保守默认值；LIMIT / OFFSET 计入索引读取量。
+- 测试结果：全新构建无警告，44 / 44 测试及 ASan / UBSan 通过，覆盖选择率、唯一/非唯一、覆盖扫描、分页与无统计回退，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 45：Access Path Optimizer。
