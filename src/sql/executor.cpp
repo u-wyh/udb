@@ -523,4 +523,12 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
     throw std::invalid_argument("Unsupported plan type");
 }
 
+ExecutionResult Executor::Execute(const PlanNode& plan, ExecutionContext& context) {
+    auto& transaction = context.GetTransaction();
+    if (!transaction.IsActive()) { throw std::logic_error("Execution transaction is not active"); }
+    auto result = Execute(plan);
+    result.transaction_id = transaction.GetId();
+    return result;
+}
+
 }  // namespace udb::sql

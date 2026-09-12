@@ -3,6 +3,7 @@
 #include "udb/catalog.h"
 #include "udb/sql/plan.h"
 #include "udb/tuple.h"
+#include "udb/execution_context.h"
 
 namespace udb::sql {
 
@@ -16,6 +17,7 @@ struct ExecutionResult {
     Schema output_schema{std::vector<Column>{}};
     std::vector<Tuple> rows;
     std::optional<RID> inserted_rid;
+    std::optional<transaction_id_t> transaction_id;
 };
 
 // Catalog must outlive this executor. Execute consumes already planned inputs;
@@ -24,6 +26,7 @@ class Executor {
 public:
     explicit Executor(Catalog& catalog) : catalog_(catalog) {}
     ExecutionResult Execute(const PlanNode& plan);
+    ExecutionResult Execute(const PlanNode& plan, ExecutionContext& context);
 
 private:
     Catalog& catalog_;

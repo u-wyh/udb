@@ -13,6 +13,7 @@ public:
     explicit SqlEngine(Catalog& catalog) : catalog_(catalog), executor_(catalog) {}
 
     ExecutionResult ExecuteSQL(std::string_view sql);
+    ExecutionResult ExecuteSQL(std::string_view sql, ExecutionContext& context);
 
 private:
     Catalog& catalog_;

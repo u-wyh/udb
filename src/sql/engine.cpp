@@ -13,4 +13,11 @@ ExecutionResult SqlEngine::ExecuteSQL(std::string_view sql) {
     return executor_.Execute(*plan);
 }
 
+ExecutionResult SqlEngine::ExecuteSQL(std::string_view sql, ExecutionContext& context) {
+    const auto statement = Parser::Parse(sql);
+    const auto bound = Binder(catalog_).Bind(statement);
+    const auto plan = Planner::Plan(bound, catalog_);
+    return executor_.Execute(*plan, context);
+}
+
 }  // namespace udb::sql

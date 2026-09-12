@@ -392,3 +392,11 @@
 - 测试结果：全新构建无警告，47 / 47 测试及 ASan / UBSan 通过，覆盖移动、显式释放、异常清理、dirty 持久化和单 frame 存储回归，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 48：Transaction Core。
+
+## 阶段 48：Transaction Core
+
+- 做了什么：实现 transaction_id、Transaction 状态机、TransactionManager 和 ExecutionContext，并贯通 SqlEngine 到 Executor。
+- 关键设计：事务由 Manager 持有且 ID 单调递增；状态只允许 Active 转为 Committed/Aborted；旧无事务执行接口保持兼容。
+- 测试结果：全新构建无警告，48 / 48 测试及 ASan / UBSan 通过，覆盖状态转换、归属校验、上下文传播和错误路径，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 49：Explicit Transactions。

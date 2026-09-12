@@ -1,0 +1,51 @@
+#include "udb/transaction.h"
+
+#include <limits>
+#include <stdexcept>
+
+namespace udb {
+
+Transaction& TransactionManager::Begin() {
+    if (next_id_ == std::numeric_limits<transaction_id_t>::max()) {
+        throw std::overflow_error("Transaction ID limit reached");
+    }
+    auto transaction = std::unique_ptr<Transaction>(new Transaction(next_id_));
+    auto* result = transaction.get();
+    transactions_.emplace(next_id_, std::move(transaction));
+    ++next_id_;
+    return *result;
+}
+
+Transaction& TransactionManager::RequireManaged(Transaction& transaction) {
+    const auto found = transactions_.find(transaction.GetId());
+    if (found == transactions_.end() || found->second.get() != &transaction) {
+        throw std::invalid_argument("Transaction is not owned by this manager");
+    }
+    return *found->second;
+}
+
+void TransactionManager::Commit(Transaction& transaction) {
+    auto& managed = RequireManaged(transaction);
+    if (!managed.IsActive()) { throw std::logic_error("Transaction is not active"); }
+    managed.state_ = TransactionState::Committed;
+}
+
+void TransactionManager::Abort(Transaction& transaction) {
+    auto& managed = RequireManaged(transaction);
+    if (!managed.IsActive()) { throw std::logic_error("Transaction is not active"); }
+    managed.state_ = TransactionState::Aborted;
+}
+
+Transaction& TransactionManager::GetTransaction(transaction_id_t id) { return *transactions_.at(id); }
+const Transaction& TransactionManager::GetTransaction(transaction_id_t id) const { return *transactions_.at(id); }
+
+std::size_t TransactionManager::GetActiveCount() const {
+    std::size_t count = 0;
+    for (const auto& [id, transaction] : transactions_) {
+        static_cast<void>(id);
+        if (transaction->IsActive()) { ++count; }
+    }
+    return count;
+}
+
+}  // namespace udb
