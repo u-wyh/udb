@@ -37,17 +37,31 @@ void Write(Page& page, std::size_t offset, std::size_t width, std::uint64_t valu
 
 }  // namespace
 
-SlottedPage::SlottedPage(Page& page, page_id_t page_id) : page_(page), page_id_(page_id) {
+SlottedPage::SlottedPage(Page& page, page_id_t page_id)
+    : page_(page), writable_(&page), page_id_(page_id) {
     if (page_id < 0) {
         throw std::invalid_argument("Slotted page requires a nonnegative page ID");
     }
 }
 
+SlottedPage::SlottedPage(const Page& page, page_id_t page_id)
+    : page_(page), writable_(nullptr), page_id_(page_id) {
+    if (page_id < 0) {
+        throw std::invalid_argument("Slotted page requires a nonnegative page ID");
+    }
+}
+
+Page& SlottedPage::MutablePage() {
+    if (writable_ == nullptr) { throw std::logic_error("Cannot modify a read-only slotted page"); }
+    return *writable_;
+}
+
 void SlottedPage::Init() {
-    page_ = Page{};
-    Write(page_, 0, 4, kMagic);
-    Write(page_, 6, 2, PAGE_SIZE);
-    Write(page_, 8, 8, kNoNext);
+    auto& page = MutablePage();
+    page = Page{};
+    Write(page, 0, 4, kMagic);
+    Write(page, 6, 2, PAGE_SIZE);
+    Write(page, 8, 8, kNoNext);
 }
 
 void SlottedPage::Validate() const {
@@ -94,14 +108,15 @@ std::optional<RID> SlottedPage::InsertRecord(const Record& record) {
         return std::nullopt;
     }
     const auto offset = static_cast<std::size_t>(begin) - record.Size();
+    auto& page = MutablePage();
     if (record.Size() != 0) {
-        std::memcpy(page_.data.data() + offset, record.Data(), record.Size());
+        std::memcpy(page.data.data() + offset, record.Data(), record.Size());
     }
-    Write(page_, slot, 2, offset);
-    Write(page_, slot + 2, 2, record.Size());
-    Write(page_, slot + 4, 2, 1);
-    Write(page_, 4, 2, count + 1);
-    Write(page_, 6, 2, offset);
+    Write(page, slot, 2, offset);
+    Write(page, slot + 2, 2, record.Size());
+    Write(page, slot + 4, 2, 1);
+    Write(page, 4, 2, count + 1);
+    Write(page, 6, 2, offset);
     return RID{page_id_, static_cast<slot_id_t>(count)};
 }
 
@@ -149,7 +164,7 @@ bool SlottedPage::UpdateRecord(RID rid, const Record& record) {
         Write(compacted, slot + 2, 2, size);
     }
     Write(compacted, 6, 2, end);
-    page_ = compacted;
+    MutablePage() = compacted;
     return true;
 }
 
@@ -174,7 +189,7 @@ void SlottedPage::DeleteRecord(RID rid) {
         Write(compacted, slot, 2, end);
     }
     Write(compacted, 6, 2, end);
-    page_ = compacted;
+    MutablePage() = compacted;
 }
 
 std::optional<RID> SlottedPage::GetFirstRID() const {
@@ -208,7 +223,7 @@ void SlottedPage::SetNextPageId(page_id_t page_id) {
     if (page_id < -1) {
         throw std::invalid_argument("Invalid next page ID");
     }
-    Write(page_, 8, 8, page_id == -1 ? kNoNext : static_cast<std::uint64_t>(page_id));
+    Write(MutablePage(), 8, 8, page_id == -1 ? kNoNext : static_cast<std::uint64_t>(page_id));
 }
 
 }  // namespace udb

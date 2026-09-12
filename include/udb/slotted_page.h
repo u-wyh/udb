@@ -8,13 +8,15 @@
 namespace udb {
 
 // Non-owning view. The Page must remain alive (and pinned if in a buffer pool).
-// Callers mark it dirty after mutations. No automatic initialization or I/O.
+// A const Page creates a read-only view; mutators reject it. Dirty tracking and
+// pin lifetime belong to the surrounding Page Guard. No automatic I/O.
 class SlottedPage {
 public:
     static constexpr std::size_t HEADER_SIZE = 16;
     static constexpr std::size_t SLOT_SIZE = 6;
 
     SlottedPage(Page& page, page_id_t page_id);
+    SlottedPage(const Page& page, page_id_t page_id);
     void Init();
     // nullopt means insufficient space, with no page mutation. Slot IDs are
     // never reused, so a deleted RID cannot alias a later record.
@@ -37,8 +39,10 @@ private:
     // Invalid/deleted RIDs throw out_of_range; corrupt layouts throw runtime_error.
     void Validate() const;
     std::size_t FindSlot(RID rid) const;
+    Page& MutablePage();
 
-    Page& page_;
+    const Page& page_;
+    Page* writable_;
     page_id_t page_id_;
 };
 

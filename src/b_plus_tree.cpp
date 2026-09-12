@@ -4,7 +4,6 @@
 #include <functional>
 #include <limits>
 #include <stdexcept>
-#include <tuple>
 #include <set>
 #include <unordered_set>
 
@@ -58,28 +57,6 @@ std::uint64_t EncodePageId(page_id_t value) {
     if (value < 0) { throw std::runtime_error("Invalid negative B+ tree page ID"); }
     return static_cast<std::uint64_t>(value);
 }
-
-class PinnedPage {
-public:
-    PinnedPage(BufferPoolManager& pool, page_id_t page_id)
-        : pool_(pool), page_id_(page_id), page_(pool.FetchPage(page_id)) {}
-    explicit PinnedPage(BufferPoolManager& pool) : pool_(pool) {
-        std::tie(page_id_, page_) = pool.NewPage();
-    }
-    ~PinnedPage() { pool_.UnpinPage(page_id_, dirty_); }
-    PinnedPage(const PinnedPage&) = delete;
-    PinnedPage& operator=(const PinnedPage&) = delete;
-
-    page_id_t GetPageId() const { return page_id_; }
-    Page& GetPage() { return *page_; }
-    void MarkDirty() { dirty_ = true; }
-
-private:
-    BufferPoolManager& pool_;
-    page_id_t page_id_ = -1;
-    Page* page_ = nullptr;
-    bool dirty_ = false;
-};
 
 }  // namespace
 
@@ -269,27 +246,25 @@ BPlusTree::Node BPlusTree::DecodeNode(const Page& page, page_id_t page_id) const
 }
 
 BPlusTree::Node BPlusTree::ReadNode(page_id_t page_id) const {
-    PinnedPage page(pool_, page_id);
+    auto page = pool_.ReadPage(page_id);
     return DecodeNode(page.GetPage(), page_id);
 }
 
 void BPlusTree::WriteNode(page_id_t page_id, const Node& node) {
     const auto encoded = EncodeNode(node);
-    PinnedPage page(pool_, page_id);
+    auto page = pool_.WritePage(page_id);
     page.GetPage() = encoded;
-    page.MarkDirty();
 }
 
 page_id_t BPlusTree::NewNode(const Node& node) {
     const auto encoded = EncodeNode(node);
-    PinnedPage page(pool_);
+    auto page = pool_.NewPageGuard();
     page.GetPage() = encoded;
-    page.MarkDirty();
     return page.GetPageId();
 }
 
 page_id_t BPlusTree::NewHeaderPage() {
-    PinnedPage page(pool_);
+    auto page = pool_.NewPageGuard();
     Page encoded;
     Write(encoded, 0, 8, kHeaderMagic);
     Write(encoded, 8, 4, options_.string_max_length ? 3 : (options_.unique ? kHeaderVersion : 2));
@@ -301,7 +276,6 @@ page_id_t BPlusTree::NewHeaderPage() {
         Write(encoded, 40, 8, options_.string_max_length);
     }
     page.GetPage() = encoded;
-    page.MarkDirty();
     return page.GetPageId();
 }
 
@@ -317,15 +291,14 @@ void BPlusTree::WriteHeader() {
         Write(encoded, 12, 4, options_.unique ? 1 : 0);
         Write(encoded, 40, 8, options_.string_max_length);
     }
-    PinnedPage page(pool_, header_page_id_);
+    auto page = pool_.WritePage(header_page_id_);
     page.GetPage() = encoded;
-    page.MarkDirty();
 }
 
 page_id_t BPlusTree::ReadHeader(BufferPoolManager& pool, page_id_t header_page_id,
                                 BPlusTreeOptions* options) {
     if (header_page_id < 0) { throw std::invalid_argument("B+ tree header page ID must be nonnegative"); }
-    PinnedPage page(pool, header_page_id);
+    auto page = pool.ReadPage(header_page_id);
     const auto& bytes = page.GetPage();
     const auto version = Read(bytes, 8, 4);
     if (Read(bytes, 0, 8) != kHeaderMagic || (version != kHeaderVersion && version != 2 && version != 3) ||
@@ -374,7 +347,7 @@ std::vector<RID> BPlusTree::ReadPostings(page_id_t head, std::vector<page_id_t>*
     std::set<std::pair<page_id_t, slot_id_t>> rids;
     while (head != -1) {
         if (!seen.insert(head).second) { throw std::runtime_error("Posting page cycle"); }
-        PinnedPage pinned(pool_, head);
+        auto pinned = pool_.ReadPage(head);
         const auto& page = pinned.GetPage();
         const auto count = Read(page, 4, 4);
         if (Read(page, 0, 4) != magic || count == 0 || count > (PAGE_SIZE - 16) / 16) {
@@ -398,7 +371,7 @@ page_id_t BPlusTree::WritePostings(const std::vector<RID>& values, std::vector<p
     if (values.empty()) { throw std::invalid_argument("Posting list cannot be empty"); }
     const auto required = (values.size() - 1) / capacity + 1;
     while (pages.size() < required) {
-        PinnedPage page(pool_);
+        auto page = pool_.NewPageGuard();
         pages.push_back(page.GetPageId());
     }
     for (std::size_t n = required; n > 0; --n) {
@@ -413,9 +386,8 @@ page_id_t BPlusTree::WritePostings(const std::vector<RID>& values, std::vector<p
             Write(encoded, 16 + j * 16, 8, EncodePageId(rid.page_id));
             Write(encoded, 24 + j * 16, 2, rid.slot_id);
         }
-        PinnedPage page(pool_, pages[i]);
+        auto page = pool_.WritePage(pages[i]);
         page.GetPage() = encoded;
-        page.MarkDirty();
     }
     for (std::size_t i = required; i < pages.size(); ++i) { DeleteNode(pages[i]); }
     return pages.front();

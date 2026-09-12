@@ -3,42 +3,14 @@
 #include <algorithm>
 #include <iterator>
 #include <stdexcept>
-#include <tuple>
 #include <unordered_set>
 
 namespace udb {
-namespace {
-
-// Own exactly one pin, including when validation/record allocation throws.
-class PinnedPage {
-public:
-    PinnedPage(BufferPoolManager& pool, page_id_t id)
-        : pool_(pool), id_(id), page_(pool.FetchPage(id)) {}
-    explicit PinnedPage(BufferPoolManager& pool) : pool_(pool) {
-        std::tie(id_, page_) = pool.NewPage();
-    }
-    ~PinnedPage() { pool_.UnpinPage(id_, dirty_); }
-    PinnedPage(const PinnedPage&) = delete;
-    PinnedPage& operator=(const PinnedPage&) = delete;
-
-    SlottedPage View() { return SlottedPage(*page_, id_); }
-    page_id_t Id() const { return id_; }
-    void MarkDirty() { dirty_ = true; }
-
-private:
-    BufferPoolManager& pool_;
-    page_id_t id_ = -1;
-    Page* page_ = nullptr;
-    bool dirty_ = false;
-};
-
-}  // namespace
 
 TableHeap::TableHeap(BufferPoolManager& pool) : pool_(pool), first_page_id_(-1) {
-    PinnedPage page(pool_);
-    page.View().Init();
-    page.MarkDirty();
-    first_page_id_ = page.Id();
+    auto page = pool_.NewPageGuard();
+    SlottedPage(page.GetPage(), page.GetPageId()).Init();
+    first_page_id_ = page.GetPageId();
 }
 
 TableHeap::TableHeap(BufferPoolManager& pool, page_id_t first_page_id)
@@ -57,8 +29,8 @@ std::vector<page_id_t> TableHeap::CollectPageIds() const {
             throw std::runtime_error("Table page chain contains a cycle");
         }
         ids.push_back(id);
-        PinnedPage page(pool_, id);
-        auto view = page.View();
+        auto page = pool_.ReadPage(id);
+        SlottedPage view(page.GetPage(), id);
         id = view.GetNextPageId();
     }
     return ids;
@@ -76,61 +48,55 @@ RID TableHeap::InsertRecord(const Record& record) {
     }
     const auto ids = CollectPageIds();
     for (const auto id : ids) {
-        PinnedPage page(pool_, id);
-        auto view = page.View();
+        auto page = pool_.WritePage(id);
+        SlottedPage view(page.GetPage(), id);
         if (const auto rid = view.InsertRecord(record)) {
-            page.MarkDirty();
             return *rid;
         }
     }
 
     RID inserted;
     {
-        PinnedPage page(pool_);
-        auto view = page.View();
+        auto page = pool_.NewPageGuard();
+        SlottedPage view(page.GetPage(), page.GetPageId());
         view.Init();
-        page.MarkDirty();
         inserted = view.InsertRecord(record).value();
     }
     // Release the new page before refetching the tail: capacity one is enough.
     // Publish the link only after the new page has been initialized successfully.
     {
-        PinnedPage tail(pool_, ids.back());
-        auto view = tail.View();
+        auto tail = pool_.WritePage(ids.back());
+        SlottedPage view(tail.GetPage(), tail.GetPageId());
         if (view.GetNextPageId() != -1) {
             throw std::runtime_error("Invalid table tail during append");
         }
         view.SetNextPageId(inserted.page_id);
-        tail.MarkDirty();
     }
     return inserted;
 }
 
 Record TableHeap::GetRecord(RID rid) const {
     RequireMember(rid.page_id);
-    PinnedPage page(pool_, rid.page_id);
-    return page.View().GetRecord(rid);
+    auto page = pool_.ReadPage(rid.page_id);
+    return SlottedPage(page.GetPage(), rid.page_id).GetRecord(rid);
 }
 
 bool TableHeap::UpdateRecord(RID rid, const Record& record) {
     RequireMember(rid.page_id);
-    PinnedPage page(pool_, rid.page_id);
-    if (!page.View().UpdateRecord(rid, record)) { return false; }
-    page.MarkDirty();
-    return true;
+    auto page = pool_.WritePage(rid.page_id);
+    return SlottedPage(page.GetPage(), rid.page_id).UpdateRecord(rid, record);
 }
 
 void TableHeap::DeleteRecord(RID rid) {
     RequireMember(rid.page_id);
-    PinnedPage page(pool_, rid.page_id);
-    page.View().DeleteRecord(rid);
-    page.MarkDirty();
+    auto page = pool_.WritePage(rid.page_id);
+    SlottedPage(page.GetPage(), rid.page_id).DeleteRecord(rid);
 }
 
 std::optional<RID> TableHeap::GetFirstRID() const {
     for (const auto id : CollectPageIds()) {
-        PinnedPage page(pool_, id);
-        auto view = page.View();
+        auto page = pool_.ReadPage(id);
+        SlottedPage view(page.GetPage(), id);
         if (const auto rid = view.GetFirstRID()) {
             return rid;
         }
@@ -145,15 +111,15 @@ std::optional<RID> TableHeap::GetNextRID(RID current) const {
         throw std::out_of_range("RID page is not in this table");
     }
     {
-        PinnedPage page(pool_, current.page_id);
-        auto view = page.View();
+        auto page = pool_.ReadPage(current.page_id);
+        SlottedPage view(page.GetPage(), current.page_id);
         if (const auto rid = view.GetNextRID(current)) {
             return rid;
         }
     }
     for (auto page_id = std::next(current_page); page_id != ids.end(); ++page_id) {
-        PinnedPage page(pool_, *page_id);
-        if (const auto rid = page.View().GetFirstRID()) { return rid; }
+        auto page = pool_.ReadPage(*page_id);
+        if (const auto rid = SlottedPage(page.GetPage(), *page_id).GetFirstRID()) { return rid; }
     }
     return std::nullopt;
 }

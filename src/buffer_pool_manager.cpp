@@ -82,6 +82,19 @@ std::pair<page_id_t, Page*> BufferPoolManager::NewPage() {
     return {page_id, Install(index, page_id, Page{})};
 }
 
+ReadPageGuard BufferPoolManager::ReadPage(page_id_t page_id) {
+    return ReadPageGuard(*this, page_id, FetchPage(page_id));
+}
+
+WritePageGuard BufferPoolManager::WritePage(page_id_t page_id) {
+    return WritePageGuard(*this, page_id, FetchPage(page_id));
+}
+
+WritePageGuard BufferPoolManager::NewPageGuard() {
+    const auto [page_id, page] = NewPage();
+    return WritePageGuard(*this, page_id, page);
+}
+
 void BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty) {
     auto& frame = frames_[page_table_.at(page_id)];
     if (frame.pin_count == 0) {

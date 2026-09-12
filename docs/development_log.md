@@ -384,3 +384,11 @@
 - 测试结果：全新构建无警告，46 / 46 测试及 ASan / UBSan 通过，覆盖有/无统计、左右侧选择、两种 Join 与结果语义，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：STOP；重新评审存储、Executor 与 Catalog 架构后再制定事务相关 roadmap。
+
+## 阶段 47：Page Guard
+
+- 做了什么：实现统一 ReadPageGuard / WritePageGuard，并替换 TableHeap 与 B+ Tree 的局部 pin/unpin RAII。
+- 关键设计：Guard 独占且可移动；Read Guard 仅暴露 const 页面；Write Guard 是统一可写入口并在释放时自动标脏。
+- 测试结果：全新构建无警告，47 / 47 测试及 ASan / UBSan 通过，覆盖移动、显式释放、异常清理、dirty 持久化和单 frame 存储回归，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 48：Transaction Core。

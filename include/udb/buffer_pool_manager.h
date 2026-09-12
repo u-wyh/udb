@@ -1,6 +1,7 @@
 #pragma once
 
 #include "udb/disk_manager.h"
+#include "udb/page_guard.h"
 
 #include <unordered_map>
 #include <utility>
@@ -10,8 +11,9 @@ namespace udb {
 
 // Single-threaded. DiskManager must outlive the pool; access its pages only
 // through this pool while cached. Page pointers remain valid while pinned.
-// Changes must be reported with UnpinPage(id, true). Flush explicitly before
-// destruction: the destructor does not perform fallible I/O.
+// Storage code uses ReadPage/WritePage/NewPageGuard so pin ownership and dirty
+// reporting are scoped. Raw methods remain for low-level tests and compatibility.
+// Flush explicitly before destruction: the destructor does not perform fallible I/O.
 class BufferPoolManager {
 public:
     BufferPoolManager(DiskManager& disk, std::size_t capacity);
@@ -21,6 +23,11 @@ public:
     // Disk errors propagate. No available unpinned frame throws runtime_error.
     Page* FetchPage(page_id_t page_id);
     std::pair<page_id_t, Page*> NewPage();
+    // Read guards expose const data. Write guards are the single mutable page
+    // entry and conservatively mark their page dirty when released.
+    ReadPageGuard ReadPage(page_id_t page_id);
+    WritePageGuard WritePage(page_id_t page_id);
+    WritePageGuard NewPageGuard();
     // Missing resident IDs throw out_of_range; a zero pin count throws logic_error.
     void UnpinPage(page_id_t page_id, bool is_dirty);
     // Explicit FlushPage writes even if clean (including currently pinned data).
