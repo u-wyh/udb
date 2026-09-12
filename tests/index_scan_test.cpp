@@ -100,8 +100,8 @@ void TestExecutionAndPersistence(const std::filesystem::path& path) {
               result.rows[0].GetValue(0) == Value::Varchar(std::string(900, 'f')) &&
               result.rows[0].GetValue(1) == Value::Integer(5),
               "INTEGER IndexScan projection is wrong");
-        Check(engine.ExecuteSQL("SELECT id FROM t WHERE 5 = id").type == PlanType::IndexScan,
-              "Reversed INTEGER equality did not execute as IndexScan");
+        Check(engine.ExecuteSQL("SELECT id FROM t WHERE 5 = id").type == PlanType::IndexOnlyScan,
+              "Reversed INTEGER equality did not execute as IndexOnlyScan");
         result = engine.ExecuteSQL("SELECT id FROM t WHERE big = 3000000005");
         Check(result.type == PlanType::IndexScan && result.rows.at(0).GetValue(0) == Value::Integer(5),
               "BIGINT IndexScan returned the wrong row");

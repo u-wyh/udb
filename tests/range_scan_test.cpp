@@ -111,7 +111,7 @@ void TestPlanningAndExecution(const std::filesystem::path& path) {
               range.GetColumnIndexes() == std::vector<std::size_t>({1, 0}),
               "Bounded range plan is wrong");
         const auto reverse = MakePlan(catalog, "SELECT id FROM t WHERE 10 > id");
-        const auto& reverse_range = dynamic_cast<const IndexRangeScanPlan&>(*reverse);
+        const auto& reverse_range = dynamic_cast<const IndexOnlyScanPlan&>(*reverse);
         Check(!reverse_range.GetLowerBound() && reverse_range.GetUpperBound() == 10 &&
               !reverse_range.IsUpperInclusive(), "Reversed range plan is wrong");
         Check(MakePlan(catalog, "SELECT * FROM plain WHERE id > 1")->GetType() == PlanType::SeqScan &&
@@ -161,7 +161,7 @@ void TestPlanningAndExecution(const std::filesystem::path& path) {
         auto& catalog = database->GetCatalog();
         SqlEngine engine(catalog);
         const auto result = engine.ExecuteSQL("SELECT id FROM t WHERE id >= 100 AND id <= 110");
-        Check(result.type == PlanType::IndexRangeScan && result.rows.size() == 1 &&
+        Check(result.type == PlanType::IndexOnlyScan && result.rows.size() == 1 &&
               result.rows[0].GetValue(0) == Value::Integer(105),
               "Range scan failed after Close/Open");
         Check(engine.ExecuteSQL("SELECT id FROM t WHERE id >= 5 AND id <= 7").rows.size() == 1,

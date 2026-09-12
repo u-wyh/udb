@@ -13,7 +13,7 @@ namespace udb::sql {
 
 enum class PlanType {
     CreateTable, CreateIndex, DropTable, DropIndex, Insert, SeqScan, IndexScan,
-    IndexRangeScan, CrossJoin, NestedLoopJoin, HashJoin, Aggregate, Delete, Update
+    IndexRangeScan, IndexOnlyScan, CrossJoin, NestedLoopJoin, HashJoin, Aggregate, Delete, Update
 };
 
 enum class JoinAlgorithm { NestedLoop, Hash };
@@ -213,6 +213,47 @@ private:
     std::optional<std::size_t> limit_;
     std::size_t offset_;
     std::vector<BoundExpressionPtr> projections_;
+};
+
+class IndexOnlyScanPlan final : public PlanNode {
+public:
+    IndexOnlyScanPlan(table_id_t table_id, index_id_t index_id,
+                      std::optional<IndexKey> exact_key,
+                      std::optional<IndexKey> lower, bool lower_inclusive,
+                      std::optional<IndexKey> upper, bool upper_inclusive,
+                      std::size_t column_index, Schema output_schema,
+                      BoundExpressionPtr predicate,
+                      std::optional<std::size_t> limit = std::nullopt,
+                      std::size_t offset = 0)
+        : PlanNode(PlanType::IndexOnlyScan, std::move(output_schema)), table_id_(table_id),
+          index_id_(index_id), exact_key_(std::move(exact_key)), lower_(std::move(lower)),
+          upper_(std::move(upper)), lower_inclusive_(lower_inclusive),
+          upper_inclusive_(upper_inclusive), column_index_(column_index),
+          predicate_(std::move(predicate)), limit_(limit), offset_(offset) {}
+    table_id_t GetTableId() const { return table_id_; }
+    index_id_t GetIndexId() const { return index_id_; }
+    const std::optional<IndexKey>& GetExactKey() const { return exact_key_; }
+    const std::optional<IndexKey>& GetLowerBound() const { return lower_; }
+    const std::optional<IndexKey>& GetUpperBound() const { return upper_; }
+    bool IsLowerInclusive() const { return lower_inclusive_; }
+    bool IsUpperInclusive() const { return upper_inclusive_; }
+    std::size_t GetColumnIndex() const { return column_index_; }
+    const BoundExpressionPtr& GetPredicate() const { return predicate_; }
+    const std::optional<std::size_t>& GetLimit() const { return limit_; }
+    std::size_t GetOffset() const { return offset_; }
+
+private:
+    table_id_t table_id_;
+    index_id_t index_id_;
+    std::optional<IndexKey> exact_key_;
+    std::optional<IndexKey> lower_;
+    std::optional<IndexKey> upper_;
+    bool lower_inclusive_;
+    bool upper_inclusive_;
+    std::size_t column_index_;
+    BoundExpressionPtr predicate_;
+    std::optional<std::size_t> limit_;
+    std::size_t offset_;
 };
 
 class JoinPlan final : public PlanNode {

@@ -344,3 +344,11 @@
 - 测试结果：全新构建无警告，41 / 41 测试及 ASan / UBSan 通过，覆盖唯一/非唯一、DML、NULL、重开及 v3 兼容，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 42：Index-only Scan 基础。
+
+## 阶段 42：Index-only Scan 基础
+
+- 做了什么：为单列整数、BIGINT 与 VARCHAR 索引增加覆盖查询计划和执行路径。
+- 关键设计：仅在索引完整覆盖投影和谓词时选用；结果直接由索引 key 构造，不读取 TableHeap；精确与范围扫描均保留 NULL、LIMIT 和 OFFSET 语义。
+- 测试结果：全新构建无警告，42 / 42 测试及 ASan / UBSan 通过，覆盖唯一/非唯一、范围、别名、重开与无表页读取，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 43：Statistics。

@@ -127,6 +127,37 @@ void CollectRangeCandidates(const BoundExpressionPtr& expression,
     }
 }
 
+bool PredicateCoveredByColumn(const BoundExpressionPtr& expression, std::size_t column_index) {
+    if (!expression) { return false; }
+    if (const auto* logical = std::get_if<BoundLogicalExpression>(&expression->node)) {
+        return logical->op == LogicalOperator::And &&
+            PredicateCoveredByColumn(logical->left, column_index) &&
+            PredicateCoveredByColumn(logical->right, column_index);
+    }
+    const auto* comparison = std::get_if<BoundComparisonExpression>(&expression->node);
+    if (!comparison || comparison->op == ComparisonOperator::NotEqual ||
+        !comparison->left || !comparison->right) { return false; }
+    const auto* left_column = std::get_if<BoundColumnExpression>(&comparison->left->node);
+    const auto* right_column = std::get_if<BoundColumnExpression>(&comparison->right->node);
+    const auto* left_literal = std::get_if<BoundLiteralExpression>(&comparison->left->node);
+    const auto* right_literal = std::get_if<BoundLiteralExpression>(&comparison->right->node);
+    return ((left_column && right_literal && !right_literal->value.IsNull() &&
+             left_column->column_index == column_index) ||
+            (right_column && left_literal && !left_literal->value.IsNull() &&
+             right_column->column_index == column_index));
+}
+
+bool ProjectionCoveredByColumn(const BoundSelectStatement& statement, std::size_t column_index) {
+    if (!statement.order_by.empty() || statement.output_schema.GetColumnCount() != 1) { return false; }
+    if (statement.projections.empty()) {
+        return statement.column_indexes.size() == 1 && statement.column_indexes[0] == column_index;
+    }
+    if (statement.projections.size() != 1 || !statement.column_indexes.empty()) { return false; }
+    const auto* column = statement.projections[0]
+        ? std::get_if<BoundColumnExpression>(&statement.projections[0]->node) : nullptr;
+    return column && column->column_index == column_index;
+}
+
 std::unique_ptr<PlanNode> Build(const BoundCreateTableStatement& statement) {
     return std::make_unique<CreateTablePlan>(statement.table_name, statement.schema);
 }
@@ -241,6 +272,15 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement,
         }
     }
     if (selected_index) {
+        const auto& metadata = catalog.GetIndex(*selected_index).GetMetadata();
+        if (metadata.GetColumnIndexes().size() == 1 &&
+            ProjectionCoveredByColumn(statement, metadata.GetColumnIndex()) &&
+            PredicateCoveredByColumn(statement.predicate, metadata.GetColumnIndex())) {
+            return std::make_unique<IndexOnlyScanPlan>(
+                statement.table_id, *selected_index, selected_key,
+                std::nullopt, false, std::nullopt, false, metadata.GetColumnIndex(),
+                statement.output_schema, statement.predicate, statement.limit, statement.offset);
+        }
         return std::make_unique<IndexScanPlan>(statement.table_id, *selected_index,
                                                *selected_key, statement.column_indexes,
                                                statement.output_schema, statement.predicate,
@@ -265,6 +305,15 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement,
         }
     }
     if (!selected_index) { return Build(statement); }
+    const auto& metadata = catalog.GetIndex(*selected_index).GetMetadata();
+    if (ProjectionCoveredByColumn(statement, metadata.GetColumnIndex()) &&
+        PredicateCoveredByColumn(statement.predicate, metadata.GetColumnIndex())) {
+        return std::make_unique<IndexOnlyScanPlan>(
+            statement.table_id, *selected_index, std::nullopt, selected_range->lower,
+            selected_range->lower_inclusive, selected_range->upper,
+            selected_range->upper_inclusive, metadata.GetColumnIndex(),
+            statement.output_schema, statement.predicate, statement.limit, statement.offset);
+    }
     return std::make_unique<IndexRangeScanPlan>(
         statement.table_id, *selected_index, selected_range->lower,
         selected_range->lower_inclusive, selected_range->upper,

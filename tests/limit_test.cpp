@@ -52,13 +52,13 @@ void TestSyntaxBindingAndPlanning(const std::filesystem::path& path) {
     const auto bound = std::get<BoundSelectStatement>(Binder(catalog).Bind(Statement{ast}));
     Check(bound.limit == 3, "Binder lost LIMIT");
     const auto range_node = Planner::Plan(BoundStatement{bound}, catalog);
-    const auto& range = dynamic_cast<const IndexRangeScanPlan&>(*range_node);
+    const auto& range = dynamic_cast<const IndexOnlyScanPlan&>(*range_node);
     Check(range.GetLimit() == 3, "IndexRangeScan plan lost LIMIT");
 
     const auto exact = Planner::Plan(
         Binder(catalog).Bind(Parser::Parse("SELECT id FROM t WHERE id = 1 LIMIT 0")), catalog);
-    Check(dynamic_cast<const IndexScanPlan&>(*exact).GetLimit() == 0,
-          "IndexScan plan lost LIMIT zero");
+    Check(dynamic_cast<const IndexOnlyScanPlan&>(*exact).GetLimit() == 0,
+          "IndexOnlyScan plan lost LIMIT zero");
     const auto sequential = Planner::Plan(
         Binder(catalog).Bind(Parser::Parse("SELECT id FROM t WHERE group_id = 1 LIMIT 2")), catalog);
     Check(dynamic_cast<const SeqScanPlan&>(*sequential).GetLimit() == 2,
@@ -85,13 +85,13 @@ void TestExecution(const std::filesystem::path& path) {
         engine.ExecuteSQL("CREATE INDEX idx_id ON t(id)");
         engine.ExecuteSQL("CREATE INDEX idx_big ON t(big)");
         auto result = engine.ExecuteSQL("SELECT id FROM t WHERE id = 5 LIMIT 0");
-        Check(result.type == PlanType::IndexScan && result.rows.empty(),
-              "IndexScan LIMIT zero returned rows");
+        Check(result.type == PlanType::IndexOnlyScan && result.rows.empty(),
+              "IndexOnlyScan LIMIT zero returned rows");
         result = engine.ExecuteSQL("SELECT id FROM t WHERE id = 5 LIMIT 2");
-        Check(result.type == PlanType::IndexScan, "Exact equality stopped using IndexScan");
+        Check(result.type == PlanType::IndexOnlyScan, "Exact equality stopped using IndexOnlyScan");
         CheckIds(result, {5});
         result = engine.ExecuteSQL("SELECT id FROM t WHERE id >= 2 LIMIT 3");
-        Check(result.type == PlanType::IndexRangeScan, "Range LIMIT stopped using IndexRangeScan");
+        Check(result.type == PlanType::IndexOnlyScan, "Range LIMIT stopped using IndexOnlyScan");
         CheckIds(result, {2, 3, 4});
         CheckIds(engine.ExecuteSQL("SELECT id FROM t WHERE id >= 0 AND group_id = 1 LIMIT 3"),
                  {1, 3, 5});
@@ -107,7 +107,7 @@ void TestExecution(const std::filesystem::path& path) {
         auto database = Database::Open(path, 1);
         SqlEngine engine(database->GetCatalog());
         const auto result = engine.ExecuteSQL("SELECT id FROM t WHERE id >= 8 LIMIT 2");
-        Check(result.type == PlanType::IndexRangeScan, "Persistent LIMIT query lost range scan");
+        Check(result.type == PlanType::IndexOnlyScan, "Persistent LIMIT query lost index-only scan");
         CheckIds(result, {8, 10});
         CheckIds(engine.ExecuteSQL("SELECT id FROM t LIMIT 2"), {1, 2});
         database->Close();

@@ -131,6 +131,24 @@ bool ReachedLimit(const std::optional<std::size_t>& limit, std::size_t row_count
     return limit && row_count >= *limit;
 }
 
+Value IndexKeyValue(const IndexKey& key, TypeId type) {
+    switch (type) {
+        case TypeId::INTEGER: return Value::Integer(static_cast<std::int32_t>(key.GetInteger()));
+        case TypeId::BIGINT: return Value::BigInt(key.GetInteger());
+        case TypeId::VARCHAR: return Value::Varchar(key.GetString());
+        default: throw std::invalid_argument("Index-only scan has an unsupported key type");
+    }
+}
+
+Tuple IndexSourceTuple(const Schema& schema, std::size_t column_index, const Value& value) {
+    std::vector<Value> values;
+    values.reserve(schema.GetColumnCount());
+    for (std::size_t i = 0; i < schema.GetColumnCount(); ++i) {
+        values.push_back(i == column_index ? value : Value::Null(schema.GetColumn(i).GetType()));
+    }
+    return Tuple(schema, std::move(values));
+}
+
 void FinishPipeline(ExecutionResult& result, std::unique_ptr<ExecutionOperator> input,
                 const Schema& output, const std::vector<std::size_t>& indexes,
                 const std::vector<PlanOrderBy>& order_by,
@@ -261,6 +279,45 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             }
             FinishPipeline(result, std::make_unique<MaterializedOperator>(std::move(tuples)), output, indexes,
                        scan.GetOrderBy(), scan.GetLimit(), scan.GetOffset(), scan.GetProjections());
+            return result;
+        }
+        case PlanType::IndexOnlyScan: {
+            const auto& scan = dynamic_cast<const IndexOnlyScanPlan&>(plan);
+            const auto& source = catalog_.GetTable(scan.GetTableId()).GetSchema();
+            const auto& output = scan.GetOutputSchema();
+            const auto& index = catalog_.GetIndex(scan.GetIndexId());
+            const auto& columns = index.GetMetadata().GetColumnIndexes();
+            if (index.GetMetadata().GetTableId() != scan.GetTableId() || columns.size() != 1 ||
+                columns[0] != scan.GetColumnIndex() || output.GetColumnCount() != 1 ||
+                output.GetColumn(0).GetType() != source.GetColumn(columns[0]).GetType()) {
+                throw std::invalid_argument("Index-only scan does not match catalog");
+            }
+            CheckExpression(scan.GetPredicate(), source);
+            ExecutionResult result{PlanType::IndexOnlyScan};
+            result.output_schema = output;
+            if (ReachedLimit(scan.GetLimit(), 0)) { return result; }
+            std::vector<IndexKey> keys;
+            if (scan.GetExactKey()) {
+                keys.assign(index.GetTree().GetValues(*scan.GetExactKey()).size(), *scan.GetExactKey());
+            } else {
+                for (const auto& [key, rid] : index.GetTree().ScanKeys(
+                         scan.GetLowerBound(), scan.IsLowerInclusive(),
+                         scan.GetUpperBound(), scan.IsUpperInclusive())) {
+                    static_cast<void>(rid);
+                    keys.push_back(key);
+                }
+            }
+            std::vector<Tuple> rows;
+            for (const auto& key : keys) {
+                const auto value = IndexKeyValue(key, source.GetColumn(columns[0]).GetType());
+                if (Matches(scan.GetPredicate(), IndexSourceTuple(source, columns[0], value))) {
+                    rows.emplace_back(output, std::vector<Value>{value});
+                }
+            }
+            auto limited = std::make_unique<LimitOperator>(
+                std::make_unique<MaterializedOperator>(std::move(rows)),
+                scan.GetLimit(), scan.GetOffset());
+            result.rows = limited->Execute();
             return result;
         }
         case PlanType::CrossJoin:

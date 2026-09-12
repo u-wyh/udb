@@ -51,12 +51,12 @@ void TestSyntaxAndPlans(const std::filesystem::path& path) {
     Check(bound.offset == 2 && bound.limit == 3, "Binder lost OFFSET");
     const auto range = Planner::Plan(Binder(catalog).Bind(
         Parser::Parse("SELECT id FROM t WHERE id >= 0 LIMIT 2 OFFSET 1")), catalog);
-    Check(dynamic_cast<const IndexRangeScanPlan&>(*range).GetOffset() == 1,
-          "IndexRangeScan lost OFFSET");
+    Check(dynamic_cast<const IndexOnlyScanPlan&>(*range).GetOffset() == 1,
+          "IndexOnlyScan lost OFFSET");
     const auto exact = Planner::Plan(Binder(catalog).Bind(
         Parser::Parse("SELECT id FROM t WHERE id = 1 LIMIT 1 OFFSET 1")), catalog);
-    Check(dynamic_cast<const IndexScanPlan&>(*exact).GetOffset() == 1,
-          "IndexScan lost OFFSET");
+    Check(dynamic_cast<const IndexOnlyScanPlan&>(*exact).GetOffset() == 1,
+          "IndexOnlyScan lost OFFSET");
     const auto sequential = Planner::Plan(Binder(catalog).Bind(
         Parser::Parse("SELECT id FROM t WHERE other = 1 LIMIT 1 OFFSET 1")), catalog);
     Check(dynamic_cast<const SeqScanPlan&>(*sequential).GetOffset() == 1,
@@ -82,11 +82,11 @@ void TestExecution(const std::filesystem::path& path) {
 
         engine.ExecuteSQL("CREATE INDEX idx_id ON t(id)");
         auto result = engine.ExecuteSQL("SELECT id FROM t WHERE id >= 0 LIMIT 3 OFFSET 2");
-        Check(result.type == PlanType::IndexRangeScan, "OFFSET disabled range scan");
+        Check(result.type == PlanType::IndexOnlyScan, "OFFSET disabled index-only scan");
         CheckIds(result, {2, 3, 4});
         result = engine.ExecuteSQL("SELECT id FROM t WHERE id = 5 LIMIT 1 OFFSET 1");
-        Check(result.type == PlanType::IndexScan && result.rows.empty(),
-              "Exact IndexScan OFFSET is wrong");
+        Check(result.type == PlanType::IndexOnlyScan && result.rows.empty(),
+              "Exact IndexOnlyScan OFFSET is wrong");
         database->Close();
     }
     {
