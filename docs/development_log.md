@@ -368,3 +368,11 @@
 - 测试结果：全新构建无警告，44 / 44 测试及 ASan / UBSan 通过，覆盖选择率、唯一/非唯一、覆盖扫描、分页与无统计回退，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 45：Access Path Optimizer。
+
+## 阶段 45：Access Path Optimizer
+
+- 做了什么：Planner 基于成本比较 SeqScan、精确索引、范围索引与 Index-only Scan 候选。
+- 关键设计：枚举所有安全匹配的索引；使用统计选择访问路径；同成本时优先覆盖更多列，并保持索引 ID 顺序稳定。
+- 测试结果：全新构建无警告，45 / 45 测试及 ASan / UBSan 通过，覆盖小表、低/高基数、多候选、覆盖扫描与残余过滤，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 46：Join Order 基础。

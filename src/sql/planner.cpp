@@ -1,4 +1,5 @@
 #include "udb/sql/planner.h"
+#include "udb/sql/cost_model.h"
 
 #include <map>
 #include <algorithm>
@@ -231,30 +232,22 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement,
     }
     std::vector<EqualityCandidate> candidates;
     CollectEqualityCandidates(statement.predicate, candidates);
-    std::optional<index_id_t> selected_index;
-    std::optional<IndexKey> selected_key;
-    std::size_t selected_columns = 0;
     const auto table_indexes = catalog.GetTableIndexes(statement.table_id);
-    for (const auto& candidate : candidates) {
-        for (const auto index_id : table_indexes) {
-            const auto& metadata = catalog.GetIndex(index_id).GetMetadata();
-            if (candidate.key.IsString() && candidate.key.GetString().size() >
-                catalog.GetIndex(index_id).GetTree().GetStringMaxLength()) { continue; }
-            if (metadata.GetColumnIndexes().size() == 1 && metadata.GetColumnIndex() == candidate.column_index &&
-                (!selected_index || index_id < *selected_index)) {
-                selected_index = index_id;
-                selected_key = candidate.key;
-                selected_columns = 1;
-            }
+    auto best = Build(statement);
+    auto best_cost = CostModel::Estimate(*best, catalog).total_cost;
+    std::size_t best_coverage = 0;
+    const auto consider = [&](std::unique_ptr<PlanNode> plan, std::size_t coverage) {
+        const auto cost = CostModel::Estimate(*plan, catalog).total_cost;
+        if (cost < best_cost || (cost == best_cost && coverage > best_coverage)) {
+            best = std::move(plan);
+            best_cost = cost;
+            best_coverage = coverage;
         }
-    }
+    };
+
     for (const auto index_id : table_indexes) {
-        const auto& metadata = catalog.GetIndex(index_id).GetMetadata();
-        if (metadata.GetColumnIndexes().size() < 2 ||
-            (selected_columns > metadata.GetColumnIndexes().size()) ||
-            (selected_columns == metadata.GetColumnIndexes().size() && selected_index && index_id >= *selected_index)) {
-            continue;
-        }
+        const auto& index = catalog.GetIndex(index_id);
+        const auto& metadata = index.GetMetadata();
         std::vector<IndexKey> components;
         for (const auto column : metadata.GetColumnIndexes()) {
             const auto found = std::find_if(candidates.begin(), candidates.end(),
@@ -262,64 +255,53 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement,
             if (found == candidates.end()) { break; }
             components.push_back(found->key);
         }
-        if (components.size() == metadata.GetColumnIndexes().size()) {
-            auto key = MakeCompositeKey(components);
-            if (key.GetString().size() <= catalog.GetIndex(index_id).GetTree().GetStringMaxLength()) {
-                selected_index = index_id;
-                selected_key = std::move(key);
-                selected_columns = metadata.GetColumnIndexes().size();
-            }
-        }
-    }
-    if (selected_index) {
-        const auto& metadata = catalog.GetIndex(*selected_index).GetMetadata();
+        if (components.size() != metadata.GetColumnIndexes().size()) { continue; }
+        auto key = components.size() == 1 ? components[0] : MakeCompositeKey(components);
+        if (key.IsString() && key.GetString().size() > index.GetTree().GetStringMaxLength()) { continue; }
         if (metadata.GetColumnIndexes().size() == 1 &&
             ProjectionCoveredByColumn(statement, metadata.GetColumnIndex()) &&
             PredicateCoveredByColumn(statement.predicate, metadata.GetColumnIndex())) {
-            return std::make_unique<IndexOnlyScanPlan>(
-                statement.table_id, *selected_index, selected_key,
+            consider(std::make_unique<IndexOnlyScanPlan>(
+                statement.table_id, index_id, key,
                 std::nullopt, false, std::nullopt, false, metadata.GetColumnIndex(),
-                statement.output_schema, statement.predicate, statement.limit, statement.offset);
+                statement.output_schema, statement.predicate, statement.limit, statement.offset),
+                metadata.GetColumnIndexes().size());
+        } else {
+            consider(std::make_unique<IndexScanPlan>(
+                statement.table_id, index_id, key, statement.column_indexes,
+                statement.output_schema, statement.predicate, order_by,
+                statement.limit, statement.offset, statement.projections),
+                metadata.GetColumnIndexes().size());
         }
-        return std::make_unique<IndexScanPlan>(statement.table_id, *selected_index,
-                                               *selected_key, statement.column_indexes,
-                                               statement.output_schema, statement.predicate,
-                                               order_by, statement.limit, statement.offset,
-                                               statement.projections);
     }
 
     std::map<std::size_t, RangeCandidate> ranges;
     CollectRangeCandidates(statement.predicate, ranges);
-    std::optional<RangeCandidate> selected_range;
     for (const auto& [column_index, range] : ranges) {
         for (const auto index_id : table_indexes) {
-            const auto& metadata = catalog.GetIndex(index_id).GetMetadata();
-            const auto max_length = catalog.GetIndex(index_id).GetTree().GetStringMaxLength();
+            const auto& index = catalog.GetIndex(index_id);
+            const auto& metadata = index.GetMetadata();
+            const auto max_length = index.GetTree().GetStringMaxLength();
             if ((range.lower && range.lower->IsString() && range.lower->GetString().size() > max_length) ||
                 (range.upper && range.upper->IsString() && range.upper->GetString().size() > max_length)) { continue; }
-            if (metadata.GetColumnIndexes().size() == 1 && metadata.GetColumnIndex() == column_index &&
-                (!selected_index || index_id < *selected_index)) {
-                selected_index = index_id;
-                selected_range = range;
+            if (metadata.GetColumnIndexes().size() != 1 || metadata.GetColumnIndex() != column_index) { continue; }
+            if (ProjectionCoveredByColumn(statement, column_index) &&
+                PredicateCoveredByColumn(statement.predicate, column_index)) {
+                consider(std::make_unique<IndexOnlyScanPlan>(
+                    statement.table_id, index_id, std::nullopt, range.lower,
+                    range.lower_inclusive, range.upper, range.upper_inclusive,
+                    column_index, statement.output_schema, statement.predicate,
+                    statement.limit, statement.offset), 1);
+            } else {
+                consider(std::make_unique<IndexRangeScanPlan>(
+                    statement.table_id, index_id, range.lower, range.lower_inclusive,
+                    range.upper, range.upper_inclusive, statement.column_indexes,
+                    statement.output_schema, statement.predicate, order_by,
+                    statement.limit, statement.offset, statement.projections), 1);
             }
         }
     }
-    if (!selected_index) { return Build(statement); }
-    const auto& metadata = catalog.GetIndex(*selected_index).GetMetadata();
-    if (ProjectionCoveredByColumn(statement, metadata.GetColumnIndex()) &&
-        PredicateCoveredByColumn(statement.predicate, metadata.GetColumnIndex())) {
-        return std::make_unique<IndexOnlyScanPlan>(
-            statement.table_id, *selected_index, std::nullopt, selected_range->lower,
-            selected_range->lower_inclusive, selected_range->upper,
-            selected_range->upper_inclusive, metadata.GetColumnIndex(),
-            statement.output_schema, statement.predicate, statement.limit, statement.offset);
-    }
-    return std::make_unique<IndexRangeScanPlan>(
-        statement.table_id, *selected_index, selected_range->lower,
-        selected_range->lower_inclusive, selected_range->upper,
-        selected_range->upper_inclusive, statement.column_indexes,
-        statement.output_schema, statement.predicate, order_by,
-        statement.limit, statement.offset, statement.projections);
+    return best;
 }
 
 std::unique_ptr<PlanNode> Build(const BoundDeleteStatement& statement) {
