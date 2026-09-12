@@ -376,3 +376,11 @@
 - 测试结果：全新构建无警告，45 / 45 测试及 ASan / UBSan 通过，覆盖小表、低/高基数、多候选、覆盖扫描与残余过滤，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 46：Join Order 基础。
+
+## 阶段 46：Join Order 基础
+
+- 做了什么：基于表统计为当前双表 Join 选择物理输入顺序。
+- 关键设计：Hash Join 在较小输入建表；Nested Loop 以较小输入为外表；输出始终恢复逻辑左右表列顺序。
+- 测试结果：全新构建无警告，46 / 46 测试及 ASan / UBSan 通过，覆盖有/无统计、左右侧选择、两种 Join 与结果语义，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：STOP；重新评审存储、Executor 与 Catalog 架构后再制定事务相关 roadmap。

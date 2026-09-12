@@ -181,7 +181,8 @@ std::unique_ptr<PlanNode> Build(const BoundInsertStatement& statement) {
 }
 
 std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement,
-                              JoinAlgorithm algorithm = JoinAlgorithm::NestedLoop) {
+                              JoinAlgorithm algorithm = JoinAlgorithm::NestedLoop,
+                              std::optional<bool> smaller_input_is_left = std::nullopt) {
     if (statement.second_table_id) {
         std::vector<PlanOrderBy> order_by;
         for (const auto& order : statement.order_by) {
@@ -190,7 +191,8 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement,
         return std::make_unique<JoinPlan>(statement.table_id, *statement.second_table_id,
             statement.column_indexes, statement.output_schema, statement.predicate,
             std::move(order_by), statement.limit, statement.offset, statement.projections,
-            statement.join_condition, algorithm);
+            statement.join_condition, algorithm,
+            smaller_input_is_left.value_or(algorithm != JoinAlgorithm::Hash));
     }
     if (!statement.aggregates.empty()) {
         std::vector<PlanAggregate> aggregates;
@@ -223,7 +225,14 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement,
             std::holds_alternative<BoundColumnExpression>(equality->left->node) &&
             std::holds_alternative<BoundColumnExpression>(equality->right->node) &&
             equality->left->type == equality->right->type && equality->left->type != TypeId::DOUBLE;
-        return Build(statement, hashable ? JoinAlgorithm::Hash : JoinAlgorithm::NestedLoop);
+        const auto algorithm = hashable ? JoinAlgorithm::Hash : JoinAlgorithm::NestedLoop;
+        std::optional<bool> smaller_input_is_left;
+        if (catalog.HasTableStatistics(statement.table_id) &&
+            catalog.HasTableStatistics(*statement.second_table_id)) {
+            smaller_input_is_left = catalog.GetTableStatistics(statement.table_id).row_count <=
+                                    catalog.GetTableStatistics(*statement.second_table_id).row_count;
+        }
+        return Build(statement, algorithm, smaller_input_is_left);
     }
     if (!statement.aggregates.empty()) { return Build(statement); }
     std::vector<PlanOrderBy> order_by;

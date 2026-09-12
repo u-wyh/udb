@@ -338,7 +338,8 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
                 std::make_unique<TableScanOperator>(catalog_.GetTableHeap(join.GetLeftTableId()), left.GetSchema()),
                 std::make_unique<TableScanOperator>(catalog_.GetTableHeap(join.GetRightTableId()), right.GetSchema()),
                 source, left.GetSchema().GetColumnCount(), join.GetJoinCondition(),
-                plan.GetType() == PlanType::HashJoin ? JoinAlgorithm::Hash : JoinAlgorithm::NestedLoop);
+                plan.GetType() == PlanType::HashJoin ? JoinAlgorithm::Hash : JoinAlgorithm::NestedLoop,
+                join.IsSmallerInputLeft());
             auto filtered = std::make_unique<FilterOperator>(std::move(joined), join.GetPredicate());
             FinishPipeline(result, std::move(filtered), output, join.GetColumnIndexes(),
                            join.GetOrderBy(), join.GetLimit(), join.GetOffset(), join.GetProjections());

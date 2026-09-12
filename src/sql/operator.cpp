@@ -307,9 +307,11 @@ std::size_t JoinKeyHash::operator()(const Value& key) const {
 }
 
 JoinOperator::JoinOperator(std::unique_ptr<ExecutionOperator> left, std::unique_ptr<ExecutionOperator> right,
-    Schema source, std::size_t left_columns, BoundExpressionPtr condition, JoinAlgorithm algorithm)
+    Schema source, std::size_t left_columns, BoundExpressionPtr condition, JoinAlgorithm algorithm,
+    std::optional<bool> smaller_input_is_left)
     : left_(std::move(left)), right_(std::move(right)), source_(std::move(source)),
-      left_columns_(left_columns), condition_(std::move(condition)), algorithm_(algorithm) {
+      left_columns_(left_columns), condition_(std::move(condition)), algorithm_(algorithm),
+      smaller_input_is_left_(smaller_input_is_left.value_or(algorithm != JoinAlgorithm::Hash)) {
     if (!left_ || !right_ || left_columns_ == 0 || left_columns_ >= source_.GetColumnCount()) {
         throw std::invalid_argument("Invalid join inputs");
     }
@@ -335,7 +337,7 @@ void JoinOperator::Init() {
     left_->Init();
     right_->Init();
     buckets_.clear();
-    left_row_.reset();
+    outer_or_probe_row_.reset();
     matches_ = nullptr;
     match_position_ = 0;
     built_ = false;
@@ -357,39 +359,49 @@ std::optional<Tuple> JoinOperator::Next() {
     RequireInitialized();
     if (ended_) { return std::nullopt; }
     if (algorithm_ == JoinAlgorithm::Hash && !built_) {
-        while (auto row = right_->Next()) {
-            const auto key = row->GetValue(right_key_);
+        auto& build = smaller_input_is_left_ ? left_ : right_;
+        const auto key_index = smaller_input_is_left_ ? left_key_ : right_key_;
+        while (auto row = build->Next()) {
+            const auto key = row->GetValue(key_index);
             if (!key.IsNull()) { buckets_[key].push_back(std::move(*row)); }
         }
         built_ = true;
     }
     for (;;) {
-        if (!left_row_) {
-            left_row_ = left_->Next();
-            if (!left_row_) { ended_ = true; return std::nullopt; }
+        if (!outer_or_probe_row_) {
+            auto& outer_or_probe = smaller_input_is_left_ ?
+                (algorithm_ == JoinAlgorithm::Hash ? right_ : left_) :
+                (algorithm_ == JoinAlgorithm::Hash ? left_ : right_);
+            outer_or_probe_row_ = outer_or_probe->Next();
+            if (!outer_or_probe_row_) { ended_ = true; return std::nullopt; }
             if (algorithm_ == JoinAlgorithm::Hash) {
-                const auto& key = left_row_->GetValue(left_key_);
-                if (key.IsNull()) { left_row_.reset(); continue; }
+                const auto key_index = smaller_input_is_left_ ? right_key_ : left_key_;
+                const auto& key = outer_or_probe_row_->GetValue(key_index);
+                if (key.IsNull()) { outer_or_probe_row_.reset(); continue; }
                 const auto found = buckets_.find(key);
-                if (found == buckets_.end()) { left_row_.reset(); continue; }
+                if (found == buckets_.end()) { outer_or_probe_row_.reset(); continue; }
                 matches_ = &found->second;
                 match_position_ = 0;
             } else {
-                right_->Init();
+                (smaller_input_is_left_ ? right_ : left_)->Init();
             }
         }
         if (algorithm_ == JoinAlgorithm::Hash) {
             while (match_position_ < matches_->size()) {
-                auto tuple = Combine(*left_row_, (*matches_)[match_position_++]);
+                const auto& match = (*matches_)[match_position_++];
+                auto tuple = smaller_input_is_left_ ? Combine(match, *outer_or_probe_row_) :
+                                                       Combine(*outer_or_probe_row_, match);
                 if (FilterOperator::Matches(condition_, tuple)) { return tuple; }
             }
         } else {
-            while (auto row = right_->Next()) {
-                auto tuple = Combine(*left_row_, *row);
+            auto& inner = smaller_input_is_left_ ? right_ : left_;
+            while (auto row = inner->Next()) {
+                auto tuple = smaller_input_is_left_ ? Combine(*outer_or_probe_row_, *row) :
+                                                       Combine(*row, *outer_or_probe_row_);
                 if (FilterOperator::Matches(condition_, tuple)) { return tuple; }
             }
         }
-        left_row_.reset();
+        outer_or_probe_row_.reset();
     }
 }
 

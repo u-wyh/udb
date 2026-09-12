@@ -264,13 +264,15 @@ public:
                   std::optional<std::size_t> limit, std::size_t offset,
                   std::vector<BoundExpressionPtr> projections,
                   BoundExpressionPtr join_condition = nullptr,
-                  JoinAlgorithm algorithm = JoinAlgorithm::NestedLoop)
+                  JoinAlgorithm algorithm = JoinAlgorithm::NestedLoop,
+                  std::optional<bool> smaller_input_is_left = std::nullopt)
         : PlanNode(algorithm == JoinAlgorithm::Hash ? PlanType::HashJoin :
                    (join_condition ? PlanType::NestedLoopJoin : PlanType::CrossJoin), std::move(output_schema)),
           left_table_id_(left_table_id), right_table_id_(right_table_id),
           indexes_(std::move(indexes)), predicate_(std::move(predicate)),
           order_by_(std::move(order_by)), limit_(limit), offset_(offset),
-          projections_(std::move(projections)), join_condition_(std::move(join_condition)) {
+          projections_(std::move(projections)), join_condition_(std::move(join_condition)),
+          smaller_input_is_left_(smaller_input_is_left.value_or(algorithm != JoinAlgorithm::Hash)) {
         if (algorithm == JoinAlgorithm::Hash && !join_condition_) {
             throw std::invalid_argument("Hash join requires an equality condition");
         }
@@ -284,6 +286,7 @@ public:
     const std::optional<std::size_t>& GetLimit() const { return limit_; }
     std::size_t GetOffset() const { return offset_; }
     const std::vector<BoundExpressionPtr>& GetProjections() const { return projections_; }
+    bool IsSmallerInputLeft() const { return smaller_input_is_left_; }
 
 private:
     table_id_t left_table_id_;
@@ -295,6 +298,7 @@ private:
     std::size_t offset_;
     std::vector<BoundExpressionPtr> projections_;
     BoundExpressionPtr join_condition_;
+    bool smaller_input_is_left_;
 };
 
 using CrossJoinPlan = JoinPlan;

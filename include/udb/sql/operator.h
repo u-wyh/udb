@@ -128,7 +128,8 @@ class JoinOperator final : public ExecutionOperator {
 public:
     JoinOperator(std::unique_ptr<ExecutionOperator> left, std::unique_ptr<ExecutionOperator> right,
                  Schema source, std::size_t left_columns, BoundExpressionPtr condition,
-                 JoinAlgorithm algorithm);
+                 JoinAlgorithm algorithm,
+                 std::optional<bool> smaller_input_is_left = std::nullopt);
     void Init() override;
     std::optional<Tuple> Next() override;
 private:
@@ -139,10 +140,11 @@ private:
     std::size_t left_columns_;
     BoundExpressionPtr condition_;
     JoinAlgorithm algorithm_;
+    bool smaller_input_is_left_;
     std::size_t left_key_ = 0;
     std::size_t right_key_ = 0;
     std::unordered_map<Value, std::vector<Tuple>, JoinKeyHash> buckets_;
-    std::optional<Tuple> left_row_;
+    std::optional<Tuple> outer_or_probe_row_;
     const std::vector<Tuple>* matches_ = nullptr;
     std::size_t match_position_ = 0;
     bool built_ = false;
