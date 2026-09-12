@@ -13,8 +13,10 @@ namespace udb::sql {
 
 enum class PlanType {
     CreateTable, CreateIndex, DropTable, DropIndex, Insert, SeqScan, IndexScan,
-    IndexRangeScan, CrossJoin, NestedLoopJoin, Aggregate, Delete, Update
+    IndexRangeScan, CrossJoin, NestedLoopJoin, HashJoin, Aggregate, Delete, Update
 };
+
+enum class JoinAlgorithm { NestedLoop, Hash };
 
 struct PlanOrderBy {
     std::size_t column_index;
@@ -215,12 +217,18 @@ public:
                   BoundExpressionPtr predicate, std::vector<PlanOrderBy> order_by,
                   std::optional<std::size_t> limit, std::size_t offset,
                   std::vector<BoundExpressionPtr> projections,
-                  BoundExpressionPtr join_condition = nullptr)
-        : PlanNode(join_condition ? PlanType::NestedLoopJoin : PlanType::CrossJoin, std::move(output_schema)),
+                  BoundExpressionPtr join_condition = nullptr,
+                  JoinAlgorithm algorithm = JoinAlgorithm::NestedLoop)
+        : PlanNode(algorithm == JoinAlgorithm::Hash ? PlanType::HashJoin :
+                   (join_condition ? PlanType::NestedLoopJoin : PlanType::CrossJoin), std::move(output_schema)),
           left_table_id_(left_table_id), right_table_id_(right_table_id),
           indexes_(std::move(indexes)), predicate_(std::move(predicate)),
           order_by_(std::move(order_by)), limit_(limit), offset_(offset),
-          projections_(std::move(projections)), join_condition_(std::move(join_condition)) {}
+          projections_(std::move(projections)), join_condition_(std::move(join_condition)) {
+        if (algorithm == JoinAlgorithm::Hash && !join_condition_) {
+            throw std::invalid_argument("Hash join requires an equality condition");
+        }
+    }
     table_id_t GetLeftTableId() const { return left_table_id_; }
     table_id_t GetRightTableId() const { return right_table_id_; }
     const BoundExpressionPtr& GetJoinCondition() const { return join_condition_; }

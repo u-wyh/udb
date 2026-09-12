@@ -3,9 +3,23 @@
 #include <algorithm>
 #include <limits>
 #include <map>
+#include <unordered_map>
 
 namespace udb::sql {
 namespace {
+
+struct JoinKeyHash {
+    std::size_t operator()(const Value& key) const {
+        switch (key.GetType()) {
+            case TypeId::BOOLEAN: return std::hash<bool>{}(key.GetBoolean());
+            case TypeId::INTEGER: return std::hash<std::int32_t>{}(key.GetInteger());
+            case TypeId::BIGINT: return std::hash<std::int64_t>{}(key.GetBigInt());
+            case TypeId::VARCHAR: return std::hash<std::string>{}(key.GetVarchar());
+            case TypeId::DOUBLE: break;
+        }
+        throw std::invalid_argument("Unsupported hash join key type");
+    }
+};
 
 bool SameColumn(const Column& a, const Column& b) {
     return a.GetName() == b.GetName() && a.GetType() == b.GetType() && a.GetMaxLength() == b.GetMaxLength();
@@ -362,7 +376,8 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             return result;
         }
         case PlanType::CrossJoin:
-        case PlanType::NestedLoopJoin: {
+        case PlanType::NestedLoopJoin:
+        case PlanType::HashJoin: {
             const auto& join = dynamic_cast<const JoinPlan&>(plan);
             const auto& left = catalog_.GetTable(join.GetLeftTableId());
             const auto& right = catalog_.GetTable(join.GetRightTableId());
@@ -377,10 +392,46 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             std::vector<Tuple> tuples;
             const auto& left_heap = catalog_.GetTableHeap(join.GetLeftTableId());
             const auto& right_heap = catalog_.GetTableHeap(join.GetRightTableId());
+            std::unordered_map<Value, std::vector<Tuple>, JoinKeyHash> buckets;
+            std::size_t left_key = 0;
+            if (plan.GetType() == PlanType::HashJoin) {
+                const auto* equality = std::get_if<BoundComparisonExpression>(&join.GetJoinCondition()->node);
+                if (!equality || equality->op != ComparisonOperator::Equal) {
+                    throw std::invalid_argument("Hash join requires column equality");
+                }
+                const auto* a = std::get_if<BoundColumnExpression>(&equality->left->node);
+                const auto* b = std::get_if<BoundColumnExpression>(&equality->right->node);
+                const auto boundary = left.GetSchema().GetColumnCount();
+                if (!a || !b || (a->column_index < boundary) == (b->column_index < boundary) ||
+                    equality->left->type == TypeId::DOUBLE) {
+                    throw std::invalid_argument("Unsupported hash join columns");
+                }
+                left_key = a->column_index < boundary ? a->column_index : b->column_index;
+                const auto right_key = (a->column_index < boundary ? b->column_index : a->column_index) - boundary;
+                for (auto rid = right_heap.GetFirstRID(); rid; rid = right_heap.GetNextRID(*rid)) {
+                    auto tuple = Tuple::Deserialize(right_heap.GetRecord(*rid), right.GetSchema());
+                    const auto key = tuple.GetValue(right_key);
+                    if (!key.IsNull()) { buckets[key].push_back(std::move(tuple)); }
+                }
+            }
             for (auto left_rid = left_heap.GetFirstRID(); left_rid;
                  left_rid = left_heap.GetNextRID(*left_rid)) {
                 const auto left_tuple = Tuple::Deserialize(
                     left_heap.GetRecord(*left_rid), left.GetSchema());
+                if (plan.GetType() == PlanType::HashJoin) {
+                    const auto& key = left_tuple.GetValue(left_key);
+                    if (key.IsNull()) { continue; }
+                    const auto found = buckets.find(key);
+                    if (found == buckets.end()) { continue; }
+                    for (const auto& right_tuple : found->second) {
+                        auto tuple = JoinTuples(left_tuple, left.GetSchema(), right_tuple,
+                                                right.GetSchema(), source);
+                        if (Matches(join.GetJoinCondition(), tuple) && Matches(join.GetPredicate(), tuple)) {
+                            tuples.push_back(std::move(tuple));
+                        }
+                    }
+                    continue;
+                }
                 for (auto right_rid = right_heap.GetFirstRID(); right_rid;
                      right_rid = right_heap.GetNextRID(*right_rid)) {
                     const auto right_tuple = Tuple::Deserialize(

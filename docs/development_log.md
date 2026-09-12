@@ -280,3 +280,11 @@
 - 测试结果：全新构建无警告，33 / 33 测试及 ASan / UBSan 通过，覆盖多页、单 frame、排序分页与重开；git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 34：Hash Join。
+
+## 阶段 34：Hash Join
+
+- 做了什么：增加可显式选择的 Hash Join，支持 INTEGER / BIGINT / BOOLEAN / VARCHAR 等值连接。
+- 关键设计：右表建桶、左表探测；NULL 不入桶，重复键保留全部组合和原顺序；复用过滤、投影与分页。
+- 测试结果：全新构建无警告，34 / 34 测试及 ASan / UBSan 通过；与 Nested Loop 对照覆盖多页、二进制字符串、重开，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 35：Join Planner。
