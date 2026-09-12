@@ -9,9 +9,9 @@ namespace udb::sql {
 class Planner {
 public:
     // Catalog-free planning preserves the original bound-to-plan conversion and
-    // always produces SeqScan for SELECT.
+    // uses SeqScan and nested-loop joins for SELECT.
     static std::unique_ptr<PlanNode> Plan(const BoundStatement& statement);
-    // Uses catalog metadata only to select an indexed equality access path.
+    // Selects indexed access paths and hashable equijoins without reading data.
     static std::unique_ptr<PlanNode> Plan(const BoundStatement& statement,
                                           const Catalog& catalog);
 };

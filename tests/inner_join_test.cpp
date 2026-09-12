@@ -26,7 +26,7 @@ void Verify(Database& database) {
     const std::string query = "SELECT a.id, b.name FROM a INNER JOIN b ON a.id = b.id";
     auto plan = Planner::Plan(Binder(database.GetCatalog()).Bind(Parser::Parse(query)),
                               database.GetCatalog());
-    Check(plan->GetType() == PlanType::NestedLoopJoin, "Expected nested loop plan");
+    Check(plan->GetType() == PlanType::HashJoin, "Expected hash join plan");
     const auto result = engine.ExecuteSQL(query);
     Check(result.rows.size() == 4, "Duplicate matches or NULL semantics are wrong");
     Check(result.rows[0].GetValue(1) == Value::Varchar("x") &&

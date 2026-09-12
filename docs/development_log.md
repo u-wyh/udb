@@ -288,3 +288,11 @@
 - 测试结果：全新构建无警告，34 / 34 测试及 ASan / UBSan 通过；与 Nested Loop 对照覆盖多页、二进制字符串、重开，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 35：Join Planner。
+
+## 阶段 35：Join Planner
+
+- 做了什么：SQL 规划自动为支持的列等值连接选择 Hash Join。
+- 关键设计：只使用 Bound 列索引和类型；CROSS JOIN / DOUBLE 保留 Nested Loop；无 Catalog 规划保留参考执行路径。
+- 测试结果：全新构建无警告，35 / 35 测试及 ASan / UBSan 通过，覆盖选择规则、残余过滤与结果一致性，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 36：Executor Operator 抽象。

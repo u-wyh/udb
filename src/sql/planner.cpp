@@ -143,7 +143,8 @@ std::unique_ptr<PlanNode> Build(const BoundInsertStatement& statement) {
     return std::make_unique<InsertPlan>(statement.table_id, statement.schema, statement.values);
 }
 
-std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement) {
+std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement,
+                              JoinAlgorithm algorithm = JoinAlgorithm::NestedLoop) {
     if (statement.second_table_id) {
         std::vector<PlanOrderBy> order_by;
         for (const auto& order : statement.order_by) {
@@ -152,7 +153,7 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement) {
         return std::make_unique<JoinPlan>(statement.table_id, *statement.second_table_id,
             statement.column_indexes, statement.output_schema, statement.predicate,
             std::move(order_by), statement.limit, statement.offset, statement.projections,
-            statement.join_condition);
+            statement.join_condition, algorithm);
     }
     if (!statement.aggregates.empty()) {
         std::vector<PlanAggregate> aggregates;
@@ -175,7 +176,18 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement) {
 
 std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement,
                                 const Catalog& catalog) {
-    if (statement.second_table_id) { return Build(statement); }
+    if (statement.second_table_id) {
+        // Bound column equality needs no row counts or string lookup. Keep the
+        // catalog-free planner as a deterministic nested-loop reference path.
+        const auto* equality = statement.join_condition
+            ? std::get_if<BoundComparisonExpression>(&statement.join_condition->node) : nullptr;
+        const bool hashable = equality && equality->op == ComparisonOperator::Equal &&
+            equality->left && equality->right &&
+            std::holds_alternative<BoundColumnExpression>(equality->left->node) &&
+            std::holds_alternative<BoundColumnExpression>(equality->right->node) &&
+            equality->left->type == equality->right->type && equality->left->type != TypeId::DOUBLE;
+        return Build(statement, hashable ? JoinAlgorithm::Hash : JoinAlgorithm::NestedLoop);
+    }
     if (!statement.aggregates.empty()) { return Build(statement); }
     std::vector<PlanOrderBy> order_by;
     for (const auto& order : statement.order_by) {

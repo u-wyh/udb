@@ -17,7 +17,7 @@ void Check(bool ok, const char* message) {
 
 void Compare(Catalog& catalog, const std::string& sql, std::optional<std::size_t> count = std::nullopt) {
     const auto bound = Binder(catalog).Bind(Parser::Parse(sql));
-    const auto planned = Planner::Plan(bound, catalog);
+    const auto planned = Planner::Plan(bound);
     const auto& original = dynamic_cast<const JoinPlan&>(*planned);
     JoinPlan hash(original.GetLeftTableId(), original.GetRightTableId(), original.GetColumnIndexes(),
         original.GetOutputSchema(), original.GetPredicate(), original.GetOrderBy(), original.GetLimit(),
