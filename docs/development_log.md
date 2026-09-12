@@ -312,3 +312,11 @@
 - 测试结果：全新构建无警告，37 / 37 测试及 ASan / UBSan 通过，覆盖惰性读取、提前结束、重置和单 frame 交错访问，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 38：Sort / Aggregate / Join 统一 pipeline。
+
+## 阶段 38：Sort / Aggregate / Join 统一 pipeline
+
+- 做了什么：排序、聚合、嵌套循环与 Hash Join 接入统一 Init / Next 算子链。
+- 关键设计：Join 按行输出，聚合按行累积分组状态；排序保留稳定物化；统一复用过滤、分页与投影。
+- 测试结果：全新构建无警告，38 / 38 测试及 ASan / UBSan 通过，覆盖组合、重置、提前结束及原 SQL 回归，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 39：Non-unique B+ Tree Index。

@@ -1,7 +1,10 @@
 #pragma once
 
 #include "udb/sql/bound_expression.h"
+#include "udb/sql/plan.h"
 #include "udb/table_heap.h"
+
+#include <unordered_map>
 
 namespace udb::sql {
 
@@ -84,6 +87,65 @@ private:
     std::size_t offset_;
     std::size_t skipped_ = 0;
     std::size_t emitted_ = 0;
+    bool ended_ = false;
+};
+
+class SortOperator final : public ExecutionOperator {
+public:
+    SortOperator(std::unique_ptr<ExecutionOperator> input, std::vector<PlanOrderBy> order_by);
+    void Init() override;
+    std::optional<Tuple> Next() override;
+private:
+    std::unique_ptr<ExecutionOperator> input_;
+    std::vector<PlanOrderBy> order_by_;
+    std::vector<Tuple> rows_;
+    std::size_t position_ = 0;
+};
+
+class AggregateOperator final : public ExecutionOperator {
+public:
+    AggregateOperator(std::unique_ptr<ExecutionOperator> input, Schema source, Schema output,
+                      std::vector<PlanAggregate> specs, std::optional<std::size_t> group_by,
+                      bool project_group);
+    void Init() override;
+    std::optional<Tuple> Next() override;
+private:
+    std::unique_ptr<ExecutionOperator> input_;
+    Schema source_;
+    Schema output_;
+    std::vector<PlanAggregate> specs_;
+    std::optional<std::size_t> group_by_;
+    bool project_group_;
+    std::vector<Tuple> rows_;
+    std::size_t position_ = 0;
+};
+
+struct JoinKeyHash {
+    std::size_t operator()(const Value& key) const;
+};
+
+class JoinOperator final : public ExecutionOperator {
+public:
+    JoinOperator(std::unique_ptr<ExecutionOperator> left, std::unique_ptr<ExecutionOperator> right,
+                 Schema source, std::size_t left_columns, BoundExpressionPtr condition,
+                 JoinAlgorithm algorithm);
+    void Init() override;
+    std::optional<Tuple> Next() override;
+private:
+    Tuple Combine(const Tuple& left, const Tuple& right) const;
+    std::unique_ptr<ExecutionOperator> left_;
+    std::unique_ptr<ExecutionOperator> right_;
+    Schema source_;
+    std::size_t left_columns_;
+    BoundExpressionPtr condition_;
+    JoinAlgorithm algorithm_;
+    std::size_t left_key_ = 0;
+    std::size_t right_key_ = 0;
+    std::unordered_map<Value, std::vector<Tuple>, JoinKeyHash> buckets_;
+    std::optional<Tuple> left_row_;
+    const std::vector<Tuple>* matches_ = nullptr;
+    std::size_t match_position_ = 0;
+    bool built_ = false;
     bool ended_ = false;
 };
 
