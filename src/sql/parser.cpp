@@ -124,6 +124,8 @@ CreateIndexStatement Parser::CreateIndex() {
     statement.table_name = Take(TokenType::Identifier, "table name").text;
     Take(TokenType::LeftParen, "(");
     statement.column_name = Take(TokenType::Identifier, "column name").text;
+    statement.column_names.push_back(statement.column_name);
+    while (Match(TokenType::Comma)) { statement.column_names.push_back(Take(TokenType::Identifier, "column name").text); }
     Take(TokenType::RightParen, ")");
     return statement;
 }

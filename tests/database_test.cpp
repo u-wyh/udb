@@ -52,7 +52,7 @@ void TestLifecycle(const std::filesystem::path& directory) {
         Check(std::filesystem::file_size(path) == 0, "Create reserved a data page");
         Check(database->GetCatalog().ListTables().empty(), "New catalog not empty");
         const auto bytes = ReadFile(meta);
-        Check(bytes.size() == 48 && bytes.substr(0, 8) == "UDBMETA1" && bytes[8] == 3, "Header fixture mismatch");
+        Check(bytes.size() == 48 && bytes.substr(0, 8) == "UDBMETA1" && bytes[8] == 4, "Header fixture mismatch");
         database->Close();
         database->Close();
         ExpectThrow<std::logic_error>([&] { database->GetCatalog(); });

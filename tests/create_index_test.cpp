@@ -63,7 +63,7 @@ void TestParserBinderPlanner(const std::filesystem::path& path) {
           ast.column_name == "id", "CREATE INDEX AST is wrong");
     for (const auto sql : {"CREATE INDEX", "CREATE INDEX idx", "CREATE INDEX idx users(id)",
                            "CREATE INDEX idx ON users", "CREATE INDEX idx ON users()",
-                           "CREATE INDEX idx ON users(id, other)", "CREATE UNIQUE INDEX idx ON users(id)",
+                           "CREATE INDEX idx ON users(id,)", "CREATE UNIQUE INDEX idx ON users(id)",
                            "CREATE INDEX idx ON users(id) extra"}) {
         Reject<SqlError>([&] { Parser::Parse(sql); });
     }
@@ -222,7 +222,7 @@ void TestMetadata(const std::filesystem::path& directory) {
     }
     const auto original = ReadFile(meta);
     const auto data = ReadFile(path);
-    Check(original.size() == 123 && static_cast<unsigned char>(original[8]) == 3,
+    Check(original.size() == 131 && static_cast<unsigned char>(original[8]) == 4,
           "Index metadata fixture layout changed unexpectedly");
     auto reject = [&](std::string bytes) {
         WriteFile(meta, bytes);
@@ -231,9 +231,9 @@ void TestMetadata(const std::filesystem::path& directory) {
     };
     auto bytes = original;
     Put(bytes, 99, 99, 8); reject(bytes);  // Missing table ID.
-    bytes = original; Put(bytes, 107, 1, 8); reject(bytes);  // Invalid column index.
-    bytes = original; Put(bytes, 115, std::filesystem::file_size(path) / PAGE_SIZE, 8); reject(bytes);
-    bytes = original; Put(bytes, 115, 0, 8); reject(bytes);  // Allocated but not a B+ tree header.
+    bytes = original; Put(bytes, 115, 1, 8); reject(bytes);  // Invalid column index.
+    bytes = original; Put(bytes, 123, std::filesystem::file_size(path) / PAGE_SIZE, 8); reject(bytes);
+    bytes = original; Put(bytes, 123, 0, 8); reject(bytes);  // Allocated but not a B+ tree header.
     bytes = original; Put(bytes, 76, UINT64_MAX, 8); reject(bytes);  // Invalid index count.
     bytes = original; Put(bytes, 68, 0, 8); reject(bytes);  // next_index_id is not above existing ID.
     reject(original.substr(0, original.size() - 1));
@@ -241,6 +241,14 @@ void TestMetadata(const std::filesystem::path& directory) {
     auto database = Database::Open(path, 1);
     Check(database->GetCatalog().GetIndex("idx").GetTree().GetValue(7).has_value(),
           "Valid index metadata failed after corruption cases");
+    database->Close();
+    auto legacy = original;
+    legacy[8] = 3;
+    legacy.erase(107, 8);  // v3 has a single column index without a count.
+    WriteFile(meta, legacy);
+    database = Database::Open(path, 1);
+    Check(database->GetCatalog().GetIndex("idx").GetTree().GetValue(7).has_value(),
+          "Legacy v3 index metadata failed to reopen");
     database->Close();
 
     const auto v2_path = directory / "v2.udb";
@@ -262,7 +270,7 @@ void TestMetadata(const std::filesystem::path& directory) {
           database->GetCatalog().ListIndexes().empty(),
           "v2 metadata compatibility failed");
     database->Close();
-    Check(static_cast<unsigned char>(ReadFile(v2_meta)[8]) == 3, "v2 metadata was not upgraded on save");
+    Check(static_cast<unsigned char>(ReadFile(v2_meta)[8]) == 4, "v2 metadata was not upgraded on save");
 }
 
 }  // namespace

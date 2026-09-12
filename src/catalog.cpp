@@ -34,24 +34,18 @@ void Catalog::RestoreIndex(const IndexMetadata& metadata) {
     const auto table = tables_.find(metadata.GetTableId());
     if (table == tables_.end()) { throw std::runtime_error("Metadata index references missing table"); }
     const auto& schema = table->second->metadata.GetSchema();
-    if (metadata.GetColumnIndex() >= schema.GetColumnCount()) {
-        throw std::runtime_error("Metadata index column is out of range");
-    }
-    const auto type = schema.GetColumn(metadata.GetColumnIndex()).GetType();
-    if (type != TypeId::INTEGER && type != TypeId::BIGINT && type != TypeId::VARCHAR) {
-        throw std::runtime_error("Metadata index column type is unsupported");
-    }
+    const auto key_width = IndexKeyWidth(schema, metadata.GetColumnIndexes());
     for (const auto& item : indexes_) {
         const auto& existing = item.second->GetMetadata();
         if (existing.GetIndexName() == metadata.GetIndexName() ||
             (existing.GetTableId() == metadata.GetTableId() &&
-             existing.GetColumnIndex() == metadata.GetColumnIndex()) ||
+             existing.GetColumnIndexes() == metadata.GetColumnIndexes()) ||
             existing.GetHeaderPageId() == metadata.GetHeaderPageId()) {
             throw std::runtime_error("Duplicate metadata index identity");
         }
     }
     auto tree = BPlusTree::OpenWithHeader(pool_, metadata.GetHeaderPageId());
-    if (tree->GetStringMaxLength() != (type == TypeId::VARCHAR ? schema.GetColumn(metadata.GetColumnIndex()).GetMaxLength() : 0)) {
+    if (tree->GetStringMaxLength() != key_width) {
         throw std::runtime_error("Index key format does not match column");
     }
     indexes_.emplace(metadata.GetIndexId(),
@@ -136,23 +130,23 @@ std::vector<table_id_t> Catalog::ListTables() const {
 
 const Index& Catalog::CreateIndex(const std::string& name, table_id_t table_id,
                                   std::size_t column_index, BPlusTreeOptions options) {
+    return CreateIndex(name, table_id, std::vector<std::size_t>{column_index}, options);
+}
+
+const Index& Catalog::CreateIndex(const std::string& name, table_id_t table_id,
+                                  const std::vector<std::size_t>& columns, BPlusTreeOptions options) {
     if (name.empty()) { throw std::invalid_argument("Index name must not be empty"); }
     const auto table = tables_.find(table_id);
     if (table == tables_.end()) { throw std::out_of_range("Index table ID not found"); }
     const auto& schema = table->second->metadata.GetSchema();
-    if (column_index >= schema.GetColumnCount()) {
-        throw std::out_of_range("Index column is out of range");
+    for (const auto column : columns) {
+        if (column >= schema.GetColumnCount()) { throw std::out_of_range("Index column is out of range"); }
     }
-    const auto type = schema.GetColumn(column_index).GetType();
-    if (type != TypeId::INTEGER && type != TypeId::BIGINT && type != TypeId::VARCHAR) {
-        throw std::invalid_argument("Index column must be INTEGER, BIGINT or VARCHAR");
-    }
-    options.string_max_length = type == TypeId::VARCHAR ? schema.GetColumn(column_index).GetMaxLength() : 0;
-    if (options.string_max_length > 1024) { throw std::invalid_argument("VARCHAR index key exceeds 1024 bytes"); }
+    options.string_max_length = IndexKeyWidth(schema, columns);
     for (const auto& item : indexes_) {
         const auto& metadata = item.second->GetMetadata();
         if (metadata.GetIndexName() == name) { throw std::invalid_argument("Index name already exists"); }
-        if (metadata.GetTableId() == table_id && metadata.GetColumnIndex() == column_index) {
+        if (metadata.GetTableId() == table_id && metadata.GetColumnIndexes() == columns) {
             throw std::invalid_argument("Table column already has an index");
         }
     }
@@ -166,13 +160,13 @@ const Index& Catalog::CreateIndex(const std::string& name, table_id_t table_id,
     auto& heap = table->second->heap;
     for (auto rid = heap.GetFirstRID(); rid; rid = heap.GetNextRID(*rid)) {
         const auto tuple = Tuple::Deserialize(heap.GetRecord(*rid), schema);
-        const auto& value = tuple.GetValue(column_index);
-        if (value.IsNull()) { continue; }
-        if (!tree->Insert(*GetIndexKey(value), *rid)) {
+        const auto key = GetTupleIndexKey(tuple, columns);
+        if (!key) { continue; }
+        if (!tree->Insert(*key, *rid)) {
             throw std::invalid_argument("Cannot build unique index from duplicate values");
         }
     }
-    IndexMetadata metadata(next_index_id_, name, table_id, column_index,
+    IndexMetadata metadata(next_index_id_, name, table_id, columns,
                            tree->GetHeaderPageId());
     auto entry = std::unique_ptr<Index>(new Index(metadata, std::move(tree)));
     const auto inserted = indexes_.emplace(next_index_id_, std::move(entry));

@@ -6,15 +6,16 @@
 namespace udb {
 namespace {
 
-// v3: magic:u64, version:u32, table_count:u32, next_table_id:u64,
+// v4: magic:u64, version:u32, table_count:u32, next_table_id:u64,
 //     free_page_count:u64, then that many free_page_id:u64 values.
 // Table: id:u64, name:(u32 length + bytes), first_page:u64, column_count:u32.
 // Column: name:(u32 length + bytes), type:u8 (0..4), max_length:u32.
 // After tables: next_index_id:u64, index_count:u64, then Index entries:
-// id:u64, name:(u32 length + bytes), table_id:u64, column_index:u64, header_page_id:u64.
+// id:u64, name:(u32 length + bytes), table_id:u64, column_count:u64,
+// column_indexes:u64[], header_page_id:u64. v3 stored one column without a count.
 // All integers are little-endian. No struct layouts or native string objects.
 constexpr std::uint64_t kMagic = 0x314154454d424455;  // "UDBMETA1"
-constexpr std::uint32_t kVersion = 3;
+constexpr std::uint32_t kVersion = 4;
 
 std::filesystem::path MetadataPath(const std::filesystem::path& path) {
     if (path.empty() || path.extension() != ".udb") {
@@ -198,7 +199,8 @@ void Database::SaveMetadata() const {
         Write(bytes, id, 8);
         WriteString(bytes, metadata.GetIndexName());
         Write(bytes, metadata.GetTableId(), 8);
-        Write(bytes, metadata.GetColumnIndex(), 8);
+        Write(bytes, metadata.GetColumnIndexes().size(), 8);
+        for (const auto column : metadata.GetColumnIndexes()) { Write(bytes, column, 8); }
         Write(bytes, static_cast<std::uint64_t>(metadata.GetHeaderPageId()), 8);
     }
     if (bytes.size() > static_cast<std::uintmax_t>(std::numeric_limits<std::streamsize>::max())) {
@@ -225,7 +227,7 @@ void Database::LoadMetadata() {
     Reader reader(metadata_path_);
     if (reader.Read(8) != kMagic) { throw std::runtime_error("Invalid metadata magic"); }
     const auto version = reader.Read(4);
-    if (version != 1 && version != 2 && version != kVersion) {
+    if (version != 1 && version != 2 && version != 3 && version != kVersion) {
         throw std::runtime_error("Unsupported metadata version");
     }
     const auto count = reader.Read(4);
@@ -264,7 +266,7 @@ void Database::LoadMetadata() {
         catalog_->RestoreTable(TableMetadata(id, name, Schema(std::move(columns)), static_cast<page_id_t>(first)));
     }
     index_id_t next_index_id = 0;
-    if (version == kVersion) {
+    if (version >= 3) {
         next_index_id = reader.Read(8);
         const auto index_count = reader.Read(8);
         if (index_count > reader.Remaining() / 36) { throw std::runtime_error("Invalid metadata index count"); }
@@ -272,14 +274,24 @@ void Database::LoadMetadata() {
             const auto id = reader.Read(8);
             const auto name = reader.String();
             const auto table_id = reader.Read(8);
-            const auto column_index = reader.Read(8);
+            const auto column_count = version >= 4 ? reader.Read(8) : 1;
+            if (column_count == 0 || column_count > reader.Remaining() / 8) {
+                throw std::runtime_error("Invalid metadata index column count");
+            }
+            std::vector<std::size_t> columns;
+            for (std::uint64_t column = 0; column < column_count; ++column) {
+                const auto value = reader.Read(8);
+                if (value > std::numeric_limits<std::size_t>::max()) {
+                    throw std::runtime_error("Invalid metadata column index");
+                }
+                columns.push_back(static_cast<std::size_t>(value));
+            }
             const auto header_page_id = reader.Read(8);
-            if (column_index > std::numeric_limits<std::size_t>::max() ||
-                header_page_id > static_cast<std::uint64_t>(std::numeric_limits<page_id_t>::max())) {
+            if (header_page_id > static_cast<std::uint64_t>(std::numeric_limits<page_id_t>::max())) {
                 throw std::runtime_error("Invalid metadata index field");
             }
             catalog_->RestoreIndex(IndexMetadata(id, name, table_id,
-                static_cast<std::size_t>(column_index), static_cast<page_id_t>(header_page_id)));
+                std::move(columns), static_cast<page_id_t>(header_page_id)));
         }
     }
     if (reader.Remaining() != 0) { throw std::runtime_error("Trailing bytes in metadata"); }

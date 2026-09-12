@@ -1,6 +1,7 @@
 #include "udb/sql/planner.h"
 
 #include <map>
+#include <algorithm>
 #include <optional>
 #include <stdexcept>
 #include <type_traits>
@@ -132,7 +133,7 @@ std::unique_ptr<PlanNode> Build(const BoundCreateTableStatement& statement) {
 
 std::unique_ptr<PlanNode> Build(const BoundCreateIndexStatement& statement) {
     return std::make_unique<CreateIndexPlan>(statement.index_name, statement.table_id,
-                                              statement.column_index);
+                                              statement.column_index, statement.column_indexes);
 }
 
 std::unique_ptr<PlanNode> Build(const BoundDropTableStatement& statement) {
@@ -201,16 +202,41 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement,
     CollectEqualityCandidates(statement.predicate, candidates);
     std::optional<index_id_t> selected_index;
     std::optional<IndexKey> selected_key;
+    std::size_t selected_columns = 0;
     const auto table_indexes = catalog.GetTableIndexes(statement.table_id);
     for (const auto& candidate : candidates) {
         for (const auto index_id : table_indexes) {
             const auto& metadata = catalog.GetIndex(index_id).GetMetadata();
             if (candidate.key.IsString() && candidate.key.GetString().size() >
                 catalog.GetIndex(index_id).GetTree().GetStringMaxLength()) { continue; }
-            if (metadata.GetColumnIndex() == candidate.column_index &&
+            if (metadata.GetColumnIndexes().size() == 1 && metadata.GetColumnIndex() == candidate.column_index &&
                 (!selected_index || index_id < *selected_index)) {
                 selected_index = index_id;
                 selected_key = candidate.key;
+                selected_columns = 1;
+            }
+        }
+    }
+    for (const auto index_id : table_indexes) {
+        const auto& metadata = catalog.GetIndex(index_id).GetMetadata();
+        if (metadata.GetColumnIndexes().size() < 2 ||
+            (selected_columns > metadata.GetColumnIndexes().size()) ||
+            (selected_columns == metadata.GetColumnIndexes().size() && selected_index && index_id >= *selected_index)) {
+            continue;
+        }
+        std::vector<IndexKey> components;
+        for (const auto column : metadata.GetColumnIndexes()) {
+            const auto found = std::find_if(candidates.begin(), candidates.end(),
+                [column](const EqualityCandidate& candidate) { return candidate.column_index == column; });
+            if (found == candidates.end()) { break; }
+            components.push_back(found->key);
+        }
+        if (components.size() == metadata.GetColumnIndexes().size()) {
+            auto key = MakeCompositeKey(components);
+            if (key.GetString().size() <= catalog.GetIndex(index_id).GetTree().GetStringMaxLength()) {
+                selected_index = index_id;
+                selected_key = std::move(key);
+                selected_columns = metadata.GetColumnIndexes().size();
             }
         }
     }
@@ -231,7 +257,7 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement,
             const auto max_length = catalog.GetIndex(index_id).GetTree().GetStringMaxLength();
             if ((range.lower && range.lower->IsString() && range.lower->GetString().size() > max_length) ||
                 (range.upper && range.upper->IsString() && range.upper->GetString().size() > max_length)) { continue; }
-            if (metadata.GetColumnIndex() == column_index &&
+            if (metadata.GetColumnIndexes().size() == 1 && metadata.GetColumnIndex() == column_index &&
                 (!selected_index || index_id < *selected_index)) {
                 selected_index = index_id;
                 selected_range = range;

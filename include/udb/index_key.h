@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <variant>
+#include <vector>
 
 namespace udb {
 
@@ -24,5 +25,26 @@ public:
 private:
     std::variant<std::int64_t, std::string> value_;
 };
+
+// Schema fixes component types. Signed numbers use sign-flipped big-endian
+// bytes; strings escape zero and terminate, preserving component ordering.
+inline IndexKey MakeCompositeKey(const std::vector<IndexKey>& components) {
+    std::string bytes;
+    for (const auto& component : components) {
+        if (component.IsString()) {
+            for (const char byte : component.GetString()) {
+                bytes.push_back(byte);
+                if (byte == '\0') { bytes.push_back(static_cast<char>(255)); }
+            }
+            bytes.append(2, '\0');
+        } else {
+            const auto value = static_cast<std::uint64_t>(component.GetInteger()) ^ (std::uint64_t{1} << 63);
+            for (int shift = 56; shift >= 0; shift -= 8) {
+                bytes.push_back(static_cast<char>((value >> shift) & 255));
+            }
+        }
+    }
+    return IndexKey(std::move(bytes));
+}
 
 }  // namespace udb

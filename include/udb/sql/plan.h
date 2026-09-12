@@ -55,17 +55,22 @@ private:
 
 class CreateIndexPlan final : public PlanNode {
 public:
-    CreateIndexPlan(std::string name, table_id_t table_id, std::size_t column_index)
+    CreateIndexPlan(std::string name, table_id_t table_id, std::size_t column_index,
+                    std::vector<std::size_t> columns = {})
         : PlanNode(PlanType::CreateIndex, Schema({})), index_name_(std::move(name)),
-          table_id_(table_id), column_index_(column_index) {}
+          table_id_(table_id), column_index_(column_index), columns_(std::move(columns)) {
+        if (columns_.empty()) { columns_.push_back(column_index); }
+    }
     const std::string& GetIndexName() const { return index_name_; }
     table_id_t GetTableId() const { return table_id_; }
     std::size_t GetColumnIndex() const { return column_index_; }
+    const std::vector<std::size_t>& GetColumnIndexes() const { return columns_; }
 
 private:
     std::string index_name_;
     table_id_t table_id_;
     std::size_t column_index_;
+    std::vector<std::size_t> columns_;
 };
 
 class DropTablePlan final : public PlanNode {

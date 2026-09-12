@@ -26,6 +26,7 @@ struct CreateIndexStatement {
     std::string index_name;
     std::string table_name;
     std::string column_name;
+    std::vector<std::string> column_names = {};
 };
 
 struct DropTableStatement {

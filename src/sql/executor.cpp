@@ -155,7 +155,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
         case PlanType::CreateIndex: {
             const auto& create = dynamic_cast<const CreateIndexPlan&>(plan);
             catalog_.CreateIndex(create.GetIndexName(), create.GetTableId(),
-                                 create.GetColumnIndex());
+                                 create.GetColumnIndexes());
             return ExecutionResult{PlanType::CreateIndex};
         }
         case PlanType::DropTable: {
@@ -177,7 +177,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             std::vector<std::pair<index_id_t, IndexKey>> index_keys;
             for (const auto index_id : catalog_.GetTableIndexes(insert.GetTableId())) {
                 const auto& index = catalog_.GetIndex(index_id);
-                const auto key = GetIndexKey(tuple.GetValue(index.GetMetadata().GetColumnIndex()));
+                const auto key = GetTupleIndexKey(tuple, index.GetMetadata().GetColumnIndexes());
                 if (!key) { continue; }
                 index.GetTree().ValidateKey(*key);
                 if (index.GetTree().IsUnique() && index.GetTree().GetValue(*key)) {
@@ -343,7 +343,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
                 DeleteMatch match{*rid, {}};
                 for (const auto index_id : table_indexes) {
                     const auto& index = catalog_.GetIndex(index_id);
-                    const auto key = GetIndexKey(tuple->GetValue(index.GetMetadata().GetColumnIndex()));
+                    const auto key = GetTupleIndexKey(*tuple, index.GetMetadata().GetColumnIndexes());
                     if (key) { match.keys.emplace_back(index_id, *key); }
                 }
                 matches.push_back(std::move(match));
@@ -414,10 +414,10 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
                 Replacement pending{*rid, replacement.Serialize(source), {}};
                 for (const auto index_id : table_indexes) {
                     const auto& index = catalog_.GetIndex(index_id);
-                    const auto column_index = index.GetMetadata().GetColumnIndex();
-                    if (!assigned[column_index]) { continue; }
-                    const auto old_key = GetIndexKey(tuple.GetValue(column_index));
-                    const auto new_key = GetIndexKey(replacement.GetValue(column_index));
+                    const auto& columns = index.GetMetadata().GetColumnIndexes();
+                    if (std::none_of(columns.begin(), columns.end(), [&](std::size_t i) { return assigned[i]; })) { continue; }
+                    const auto old_key = GetTupleIndexKey(tuple, columns);
+                    const auto new_key = GetTupleIndexKey(replacement, columns);
                     if (new_key) { index.GetTree().ValidateKey(*new_key); }
                     if (old_key != new_key) {
                         pending.index_changes.push_back(IndexChange{index_id, *rid, old_key, new_key});

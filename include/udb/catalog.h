@@ -34,10 +34,13 @@ public:
     const TableHeap& GetTableHeap(const std::string& name) const;
     std::vector<table_id_t> ListTables() const;  // Ascending ID order; snapshot.
 
-    // Builds a unique single-column INTEGER/BIGINT index from existing rows,
-    // then registers it. NULL values are skipped; duplicate keys fail.
+    // Builds before publishing; options select uniqueness. Any NULL component
+    // skips the row. INTEGER/BIGINT/VARCHAR components preserve column order.
     const Index& CreateIndex(const std::string& name, table_id_t table_id,
                              std::size_t column_index,
+                             BPlusTreeOptions options = {});
+    const Index& CreateIndex(const std::string& name, table_id_t table_id,
+                             const std::vector<std::size_t>& columns,
                              BPlusTreeOptions options = {});
     void DropIndex(index_id_t id);
     void DropIndex(const std::string& name);

@@ -20,6 +20,7 @@ struct BoundCreateIndexStatement {
     std::string index_name;
     table_id_t table_id;
     std::size_t column_index;
+    std::vector<std::size_t> column_indexes = {};
 };
 
 struct BoundDropTableStatement {

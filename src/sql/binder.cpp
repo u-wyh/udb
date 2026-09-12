@@ -228,24 +228,20 @@ BoundCreateTableStatement Binder::BindStatement(const CreateTableStatement& stat
 BoundCreateIndexStatement Binder::BindStatement(const CreateIndexStatement& statement) const {
     if (statement.index_name.empty()) { throw BindError("CREATE INDEX requires a name"); }
     const auto& table = Lookup(statement.table_name);
-    const auto column_index = FindColumn(table.GetSchema(), statement.column_name);
-    const auto type = table.GetSchema().GetColumn(column_index).GetType();
-    if (type != TypeId::INTEGER && type != TypeId::BIGINT && type != TypeId::VARCHAR) {
-        throw BindError("Index column must be INTEGER, BIGINT or VARCHAR");
-    }
-    if (type == TypeId::VARCHAR && table.GetSchema().GetColumn(column_index).GetMaxLength() > 1024) {
-        throw BindError("VARCHAR index key exceeds 1024 bytes");
-    }
+    std::vector<std::size_t> columns;
+    const auto names = statement.column_names.empty() ? std::vector<std::string>{statement.column_name} : statement.column_names;
+    for (const auto& name : names) { columns.push_back(FindColumn(table.GetSchema(), name)); }
+    IndexKeyWidth(table.GetSchema(), columns);
     for (const auto id : catalog_.ListIndexes()) {
         const auto& metadata = catalog_.GetIndex(id).GetMetadata();
         if (metadata.GetIndexName() == statement.index_name) {
             throw BindError("Index already exists: " + statement.index_name);
         }
-        if (metadata.GetTableId() == table.GetTableId() && metadata.GetColumnIndex() == column_index) {
+        if (metadata.GetTableId() == table.GetTableId() && metadata.GetColumnIndexes() == columns) {
             throw BindError("Table column already has an index");
         }
     }
-    return {statement.index_name, table.GetTableId(), column_index};
+    return {statement.index_name, table.GetTableId(), columns.front(), columns};
 }
 
 BoundDropTableStatement Binder::BindStatement(const DropTableStatement& statement) const {

@@ -336,3 +336,11 @@
 - 测试结果：全新构建无警告，40 / 40 测试及 ASan / UBSan 通过，覆盖前缀、内嵌零、最大长度、多层分裂、删除与重开，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 41：Composite Index。
+
+## 阶段 41：Composite Index
+
+- 做了什么：支持多列索引 key、Catalog 元数据、DML 维护和完整等值条件匹配。
+- 关键设计：按声明列顺序编码；任一 NULL 不入索引；Planner 仅在所有索引列等值绑定时选择复合索引，并优先更完整 key。
+- 测试结果：全新构建无警告，41 / 41 测试及 ASan / UBSan 通过，覆盖唯一/非唯一、DML、NULL、重开及 v3 兼容，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 42：Index-only Scan 基础。
