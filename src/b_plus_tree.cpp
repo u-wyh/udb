@@ -87,13 +87,14 @@ struct BPlusTree::Node {
     bool leaf = true;
     page_id_t parent = -1;
     page_id_t next_leaf = -1;
-    std::vector<std::int64_t> keys;
+    std::vector<IndexKey> keys;
     std::vector<RID> values;
     std::vector<page_id_t> children;
 };
 
 BPlusTree::BPlusTree(BufferPoolManager& pool, BPlusTreeOptions options)
     : pool_(pool), options_(options) {
+    AdjustCapacities();
     ValidateOptions();
     root_page_id_ = NewNode(Node{});
 }
@@ -101,6 +102,7 @@ BPlusTree::BPlusTree(BufferPoolManager& pool, BPlusTreeOptions options)
 BPlusTree::BPlusTree(BufferPoolManager& pool, page_id_t root_page_id,
                      BPlusTreeOptions options)
     : pool_(pool), root_page_id_(root_page_id), options_(options) {
+    AdjustCapacities();
     ValidateOptions();
     if (root_page_id < 0) { throw std::invalid_argument("B+ tree root page ID must be nonnegative"); }
     Validate();
@@ -123,11 +125,61 @@ std::unique_ptr<BPlusTree> BPlusTree::OpenWithHeader(
 }
 
 void BPlusTree::ValidateOptions() const {
-    if (options_.leaf_max_size < 2 || options_.leaf_max_size > BPlusTreeOptions::LEAF_CAPACITY ||
+    if (options_.string_max_length > 1024 || options_.leaf_max_size < 2 || options_.leaf_max_size > (PAGE_SIZE - BPlusTreeOptions::HEADER_SIZE) / (KeyWidth() + 16) ||
         options_.internal_max_size < 2 ||
-        options_.internal_max_size > BPlusTreeOptions::INTERNAL_CAPACITY) {
+        options_.internal_max_size > (PAGE_SIZE - BPlusTreeOptions::HEADER_SIZE) / (KeyWidth() + 8)) {
         throw std::invalid_argument("B+ tree max sizes are outside page capacity");
     }
+}
+
+void BPlusTree::AdjustCapacities() {
+    if (options_.string_max_length > 1024) { throw std::invalid_argument("String index keys exceed 1024 bytes"); }
+    if (options_.leaf_max_size == BPlusTreeOptions::LEAF_CAPACITY) {
+        options_.leaf_max_size = (PAGE_SIZE - BPlusTreeOptions::HEADER_SIZE) / (KeyWidth() + 16);
+    }
+    if (options_.internal_max_size == BPlusTreeOptions::INTERNAL_CAPACITY) {
+        options_.internal_max_size = (PAGE_SIZE - BPlusTreeOptions::HEADER_SIZE) / (KeyWidth() + 8);
+    }
+}
+
+void BPlusTree::ValidateKey(const IndexKey& key) const {
+    if (key.IsString() != (options_.string_max_length != 0)) {
+        throw std::invalid_argument("Index key kind mismatch");
+    }
+    if (key.IsString() && key.GetString().size() > options_.string_max_length) {
+        throw std::length_error("Index key exceeds configured length");
+    }
+}
+
+IndexKey BPlusTree::ReadKey(const Page& page, std::size_t offset) const {
+    if (!options_.string_max_length) { return DecodeKey(Read(page, offset, 8)); }
+    const auto size = Read(page, offset, 2);
+    if (size > options_.string_max_length || offset > PAGE_SIZE - 2 || size > PAGE_SIZE - offset - 2) {
+        throw std::runtime_error("Invalid string index key length");
+    }
+    return std::string(page.data.data() + offset + 2, static_cast<std::size_t>(size));
+}
+
+void BPlusTree::WriteKey(Page& page, std::size_t offset, const IndexKey& key) const {
+    ValidateKey(key);
+    if (!key.IsString()) { Write(page, offset, 8, static_cast<std::uint64_t>(key.GetInteger())); return; }
+    const auto& bytes = key.GetString();
+    Write(page, offset, 2, bytes.size());
+    if (offset > PAGE_SIZE - 2 || bytes.size() > PAGE_SIZE - offset - 2) {
+        throw std::runtime_error("String index key exceeds page bounds");
+    }
+    std::copy(bytes.begin(), bytes.end(), page.data.begin() + static_cast<std::ptrdiff_t>(offset + 2));
+}
+
+std::vector<std::pair<std::int64_t, RID>> BPlusTree::ScanRange(
+    std::optional<std::int64_t> lower, bool lower_inclusive,
+    std::optional<std::int64_t> upper, bool upper_inclusive) const {
+    if (options_.string_max_length) { throw std::invalid_argument("Use ScanKeys for string indexes"); }
+    std::vector<std::pair<std::int64_t, RID>> result;
+    for (const auto& entry : ScanKeys(lower, lower_inclusive, upper, upper_inclusive)) {
+        result.emplace_back(entry.first.GetInteger(), entry.second);
+    }
+    return result;
 }
 
 Page BPlusTree::EncodeNode(const Node& node) const {
@@ -148,10 +200,10 @@ Page BPlusTree::EncodeNode(const Node& node) const {
         Write(page, 16, 8, EncodePageId(node.next_leaf));
         for (std::size_t i = 0; i < node.keys.size(); ++i) {
             if (node.values[i].page_id < 0) { throw std::runtime_error("Invalid RID in B+ tree leaf"); }
-            const auto offset = BPlusTreeOptions::HEADER_SIZE + i * BPlusTreeOptions::LEAF_ENTRY_SIZE;
-            Write(page, offset, 8, static_cast<std::uint64_t>(node.keys[i]));
-            Write(page, offset + 8, 8, static_cast<std::uint64_t>(node.values[i].page_id));
-            Write(page, offset + 16, 2, node.values[i].slot_id);
+            const auto offset = BPlusTreeOptions::HEADER_SIZE + i * (KeyWidth() + 16);
+            WriteKey(page, offset, node.keys[i]);
+            Write(page, offset + KeyWidth(), 8, static_cast<std::uint64_t>(node.values[i].page_id));
+            Write(page, offset + KeyWidth() + 8, 2, node.values[i].slot_id);
         }
     } else {
         // keys[i] is the minimum key reachable through children[i + 1].
@@ -161,9 +213,9 @@ Page BPlusTree::EncodeNode(const Node& node) const {
         }
         Write(page, 16, 8, EncodePageId(node.children.front()));
         for (std::size_t i = 0; i < node.keys.size(); ++i) {
-            const auto offset = BPlusTreeOptions::HEADER_SIZE + i * BPlusTreeOptions::INTERNAL_ENTRY_SIZE;
-            Write(page, offset, 8, static_cast<std::uint64_t>(node.keys[i]));
-            Write(page, offset + 8, 8, EncodePageId(node.children[i + 1]));
+            const auto offset = BPlusTreeOptions::HEADER_SIZE + i * (KeyWidth() + 8);
+            WriteKey(page, offset, node.keys[i]);
+            Write(page, offset + KeyWidth(), 8, EncodePageId(node.children[i + 1]));
         }
     }
     return page;
@@ -187,11 +239,11 @@ BPlusTree::Node BPlusTree::DecodeNode(const Page& page, page_id_t page_id) const
         if (node.next_leaf == page_id) { throw std::runtime_error("B+ tree leaf points to itself"); }
         node.values.reserve(count);
         for (std::size_t i = 0; i < count; ++i) {
-            const auto offset = BPlusTreeOptions::HEADER_SIZE + i * BPlusTreeOptions::LEAF_ENTRY_SIZE;
-            node.keys.push_back(DecodeKey(Read(page, offset, 8)));
-            const auto rid_page = DecodePageId(Read(page, offset + 8, 8));
+            const auto offset = BPlusTreeOptions::HEADER_SIZE + i * (KeyWidth() + 16);
+            node.keys.push_back(ReadKey(page, offset));
+            const auto rid_page = DecodePageId(Read(page, offset + KeyWidth(), 8));
             if (rid_page < 0) { throw std::runtime_error("Invalid RID in B+ tree leaf"); }
-            node.values.push_back(RID{rid_page, static_cast<slot_id_t>(Read(page, offset + 16, 2))});
+            node.values.push_back(RID{rid_page, static_cast<slot_id_t>(Read(page, offset + KeyWidth() + 8, 2))});
         }
     } else {
         if (count == 0 || count > options_.internal_max_size) {
@@ -202,9 +254,9 @@ BPlusTree::Node BPlusTree::DecodeNode(const Page& page, page_id_t page_id) const
         if (first_child < 0) { throw std::runtime_error("Invalid B+ tree child page ID"); }
         node.children.push_back(first_child);
         for (std::size_t i = 0; i < count; ++i) {
-            const auto offset = BPlusTreeOptions::HEADER_SIZE + i * BPlusTreeOptions::INTERNAL_ENTRY_SIZE;
-            node.keys.push_back(DecodeKey(Read(page, offset, 8)));
-            const auto child = DecodePageId(Read(page, offset + 8, 8));
+            const auto offset = BPlusTreeOptions::HEADER_SIZE + i * (KeyWidth() + 8);
+            node.keys.push_back(ReadKey(page, offset));
+            const auto child = DecodePageId(Read(page, offset + KeyWidth(), 8));
             if (child < 0) { throw std::runtime_error("Invalid B+ tree child page ID"); }
             node.children.push_back(child);
         }
@@ -240,10 +292,14 @@ page_id_t BPlusTree::NewHeaderPage() {
     PinnedPage page(pool_);
     Page encoded;
     Write(encoded, 0, 8, kHeaderMagic);
-    Write(encoded, 8, 4, options_.unique ? kHeaderVersion : 2);
+    Write(encoded, 8, 4, options_.string_max_length ? 3 : (options_.unique ? kHeaderVersion : 2));
     Write(encoded, 16, 8, EncodePageId(root_page_id_));
     Write(encoded, 24, 8, options_.leaf_max_size);
     Write(encoded, 32, 8, options_.internal_max_size);
+    if (options_.string_max_length) {
+        Write(encoded, 12, 4, options_.unique ? 1 : 0);
+        Write(encoded, 40, 8, options_.string_max_length);
+    }
     page.GetPage() = encoded;
     page.MarkDirty();
     return page.GetPageId();
@@ -253,10 +309,14 @@ void BPlusTree::WriteHeader() {
     if (header_page_id_ < 0) { return; }
     Page encoded;
     Write(encoded, 0, 8, kHeaderMagic);
-    Write(encoded, 8, 4, options_.unique ? kHeaderVersion : 2);
+    Write(encoded, 8, 4, options_.string_max_length ? 3 : (options_.unique ? kHeaderVersion : 2));
     Write(encoded, 16, 8, EncodePageId(root_page_id_));
     Write(encoded, 24, 8, options_.leaf_max_size);
     Write(encoded, 32, 8, options_.internal_max_size);
+    if (options_.string_max_length) {
+        Write(encoded, 12, 4, options_.unique ? 1 : 0);
+        Write(encoded, 40, 8, options_.string_max_length);
+    }
     PinnedPage page(pool_, header_page_id_);
     page.GetPage() = encoded;
     page.MarkDirty();
@@ -268,11 +328,17 @@ page_id_t BPlusTree::ReadHeader(BufferPoolManager& pool, page_id_t header_page_i
     PinnedPage page(pool, header_page_id);
     const auto& bytes = page.GetPage();
     const auto version = Read(bytes, 8, 4);
-    if (Read(bytes, 0, 8) != kHeaderMagic || (version != kHeaderVersion && version != 2) ||
-        Read(bytes, 12, 4) != 0) {
+    if (Read(bytes, 0, 8) != kHeaderMagic || (version != kHeaderVersion && version != 2 && version != 3) ||
+        Read(bytes, 12, 4) > (version == 3 ? 1U : 0U)) {
         throw std::runtime_error("Invalid B+ tree header page");
     }
-    if (options) { options->unique = version == kHeaderVersion; }
+    if (options) {
+        options->unique = version == 3 ? Read(bytes, 12, 4) != 0 : version == kHeaderVersion;
+        options->string_max_length = version == 3 ? Read(bytes, 40, 8) : 0;
+        if (version == 3 && (options->string_max_length == 0 || options->string_max_length > 1024)) {
+            throw std::runtime_error("Invalid string index key capacity");
+        }
+    }
     const auto root = DecodePageId(Read(bytes, 16, 8));
     if (root < 0) { throw std::runtime_error("Invalid B+ tree root in header"); }
     const auto leaf_max_size = static_cast<std::size_t>(Read(bytes, 24, 8));
@@ -287,7 +353,8 @@ page_id_t BPlusTree::ReadHeader(BufferPoolManager& pool, page_id_t header_page_i
     return root;
 }
 
-page_id_t BPlusTree::FindLeaf(std::int64_t key, std::vector<page_id_t>* path) const {
+page_id_t BPlusTree::FindLeaf(const IndexKey& key, std::vector<page_id_t>* path) const {
+    ValidateKey(key);
     std::unordered_set<page_id_t> seen;
     auto page_id = root_page_id_;
     while (true) {
@@ -354,30 +421,32 @@ page_id_t BPlusTree::WritePostings(const std::vector<RID>& values, std::vector<p
     return pages.front();
 }
 
-std::vector<RID> BPlusTree::GetValues(std::int64_t key) const {
+std::vector<RID> BPlusTree::GetValues(const IndexKey& key) const {
     const auto value = FindValue(key);
     if (!value) { return {}; }
     return options_.unique ? std::vector<RID>{*value} : ReadPostings(value->page_id);
 }
 
-std::optional<RID> BPlusTree::GetValue(std::int64_t key) const {
+std::optional<RID> BPlusTree::GetValue(const IndexKey& key) const {
     const auto values = GetValues(key);
     return values.empty() ? std::nullopt : std::optional<RID>(values.front());
 }
 
-std::vector<std::pair<std::int64_t, RID>> BPlusTree::ScanRange(
-    std::optional<std::int64_t> lower, bool lower_inclusive,
-    std::optional<std::int64_t> upper, bool upper_inclusive) const {
+std::vector<std::pair<IndexKey, RID>> BPlusTree::ScanKeys(
+    std::optional<IndexKey> lower, bool lower_inclusive,
+    std::optional<IndexKey> upper, bool upper_inclusive) const {
+    if (lower) { ValidateKey(*lower); }
+    if (upper) { ValidateKey(*upper); }
     auto entries = ScanEntries(lower, lower_inclusive, upper, upper_inclusive);
     if (options_.unique) { return entries; }
-    std::vector<std::pair<std::int64_t, RID>> result;
+    std::vector<std::pair<IndexKey, RID>> result;
     for (const auto& [key, head] : entries) {
         for (const auto rid : ReadPostings(head.page_id)) { result.emplace_back(key, rid); }
     }
     return result;
 }
 
-bool BPlusTree::Insert(std::int64_t key, RID rid) {
+bool BPlusTree::Insert(const IndexKey& key, RID rid) {
     if (options_.unique) { return InsertKey(key, rid); }
     if (rid.page_id < 0) { throw std::invalid_argument("Invalid RID page ID"); }
     const auto head = FindValue(key);
@@ -389,7 +458,7 @@ bool BPlusTree::Insert(std::int64_t key, RID rid) {
     return head ? true : InsertKey(key, RID{id, 0});
 }
 
-bool BPlusTree::Remove(std::int64_t key) {
+bool BPlusTree::Remove(const IndexKey& key) {
     if (options_.unique) { return RemoveKey(key); }
     const auto head = FindValue(key);
     if (!head) { return false; }
@@ -400,7 +469,7 @@ bool BPlusTree::Remove(std::int64_t key) {
     return true;
 }
 
-bool BPlusTree::Remove(std::int64_t key, RID rid) {
+bool BPlusTree::Remove(const IndexKey& key, RID rid) {
     const auto head = FindValue(key);
     if (!head) { return false; }
     if (options_.unique) { return *head == rid && RemoveKey(key); }
@@ -414,17 +483,17 @@ bool BPlusTree::Remove(std::int64_t key, RID rid) {
     return true;
 }
 
-std::optional<RID> BPlusTree::FindValue(std::int64_t key) const {
+std::optional<RID> BPlusTree::FindValue(const IndexKey& key) const {
     const auto leaf = ReadNode(FindLeaf(key, nullptr));
     const auto found = std::lower_bound(leaf.keys.begin(), leaf.keys.end(), key);
     if (found == leaf.keys.end() || *found != key) { return std::nullopt; }
     return leaf.values[static_cast<std::size_t>(found - leaf.keys.begin())];
 }
 
-std::vector<std::pair<std::int64_t, RID>> BPlusTree::ScanEntries(
-    std::optional<std::int64_t> lower, bool lower_inclusive,
-    std::optional<std::int64_t> upper, bool upper_inclusive) const {
-    std::vector<std::pair<std::int64_t, RID>> result;
+std::vector<std::pair<IndexKey, RID>> BPlusTree::ScanEntries(
+    std::optional<IndexKey> lower, bool lower_inclusive,
+    std::optional<IndexKey> upper, bool upper_inclusive) const {
+    std::vector<std::pair<IndexKey, RID>> result;
     if (lower && upper && (*lower > *upper ||
         (*lower == *upper && (!lower_inclusive || !upper_inclusive)))) {
         return result;
@@ -460,7 +529,7 @@ std::vector<std::pair<std::int64_t, RID>> BPlusTree::ScanEntries(
     return result;
 }
 
-bool BPlusTree::InsertKey(std::int64_t key, RID rid) {
+bool BPlusTree::InsertKey(const IndexKey& key, RID rid) {
     if (rid.page_id < 0) { throw std::invalid_argument("B+ tree RID page ID must be nonnegative"); }
     std::vector<page_id_t> path;
     const auto leaf_page_id = FindLeaf(key, &path);
@@ -490,7 +559,7 @@ bool BPlusTree::InsertKey(std::int64_t key, RID rid) {
     return true;
 }
 
-bool BPlusTree::RemoveKey(std::int64_t key) {
+bool BPlusTree::RemoveKey(const IndexKey& key) {
     const auto leaf_page_id = FindLeaf(key, nullptr);
     auto leaf = ReadNode(leaf_page_id);
     const auto position = std::lower_bound(leaf.keys.begin(), leaf.keys.end(), key);
@@ -549,7 +618,7 @@ void BPlusTree::DeletePages() {
     header_page_id_ = -1;
 }
 
-std::int64_t BPlusTree::GetMinimumKey(page_id_t page_id) const {
+IndexKey BPlusTree::GetMinimumKey(page_id_t page_id) const {
     std::unordered_set<page_id_t> seen;
     while (true) {
         if (!seen.insert(page_id).second) {
@@ -722,7 +791,7 @@ void BPlusTree::SetParent(page_id_t page_id, page_id_t parent_page_id) {
     WriteNode(page_id, node);
 }
 
-void BPlusTree::InsertIntoParent(page_id_t left_page_id, std::int64_t separator,
+void BPlusTree::InsertIntoParent(page_id_t left_page_id, IndexKey separator,
                                  page_id_t right_page_id, std::vector<page_id_t> path) {
     if (path.empty()) {
         Node root;
@@ -782,8 +851,8 @@ std::size_t BPlusTree::GetHeight() const {
 
 void BPlusTree::Validate() const {
     struct Info {
-        std::int64_t minimum = 0;
-        std::int64_t maximum = 0;
+        IndexKey minimum = 0;
+        IndexKey maximum = 0;
         bool has_key = false;
         std::size_t height = 0;
     };

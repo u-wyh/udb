@@ -230,8 +230,11 @@ BoundCreateIndexStatement Binder::BindStatement(const CreateIndexStatement& stat
     const auto& table = Lookup(statement.table_name);
     const auto column_index = FindColumn(table.GetSchema(), statement.column_name);
     const auto type = table.GetSchema().GetColumn(column_index).GetType();
-    if (type != TypeId::INTEGER && type != TypeId::BIGINT) {
-        throw BindError("Index column must be INTEGER or BIGINT");
+    if (type != TypeId::INTEGER && type != TypeId::BIGINT && type != TypeId::VARCHAR) {
+        throw BindError("Index column must be INTEGER, BIGINT or VARCHAR");
+    }
+    if (type == TypeId::VARCHAR && table.GetSchema().GetColumn(column_index).GetMaxLength() > 1024) {
+        throw BindError("VARCHAR index key exceeds 1024 bytes");
     }
     for (const auto id : catalog_.ListIndexes()) {
         const auto& metadata = catalog_.GetIndex(id).GetMetadata();

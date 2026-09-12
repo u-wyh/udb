@@ -328,3 +328,11 @@
 - 测试结果：全新构建无警告，39 / 39 测试及 ASan / UBSan 通过，覆盖列表跨页、乱序删除、回收、多索引 DML 与重开，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 40：VARCHAR Index。
+
+## 阶段 40：VARCHAR Index
+
+- 做了什么：VARCHAR 支持唯一/非唯一索引、DML 维护、精确和范围查询。
+- 关键设计：IndexKey 保留完整字节与长度；字符串 key 上限 1024 字节，页容量随声明长度调整；新 header 兼容旧整数格式。
+- 测试结果：全新构建无警告，40 / 40 测试及 ASan / UBSan 通过，覆盖前缀、内嵌零、最大长度、多层分裂、删除与重开，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 41：Composite Index。

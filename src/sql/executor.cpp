@@ -81,20 +81,11 @@ void CheckExpression(const BoundExpressionPtr& expression, const Schema& source)
     CheckExpression(logical.right, source);
 }
 
-std::optional<std::int64_t> GetIndexKey(const Value& value) {
-    if (value.IsNull()) { return std::nullopt; }
-    if (value.GetType() == TypeId::INTEGER) {
-        return static_cast<std::int64_t>(value.GetInteger());
-    }
-    if (value.GetType() == TypeId::BIGINT) { return value.GetBigInt(); }
-    throw std::logic_error("Index column has an unsupported type");
-}
-
 struct IndexChange {
     index_id_t index_id;
     RID rid;
-    std::optional<std::int64_t> old_key;
-    std::optional<std::int64_t> new_key;
+    std::optional<IndexKey> old_key;
+    std::optional<IndexKey> new_key;
 };
 
 void CheckScan(const Schema& source, const Schema& output,
@@ -183,11 +174,12 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             CheckSchema(insert.GetTableSchema(), schema);
             const Tuple tuple(schema, insert.GetValues());
             const auto record = tuple.Serialize(schema);
-            std::vector<std::pair<index_id_t, std::int64_t>> index_keys;
+            std::vector<std::pair<index_id_t, IndexKey>> index_keys;
             for (const auto index_id : catalog_.GetTableIndexes(insert.GetTableId())) {
                 const auto& index = catalog_.GetIndex(index_id);
                 const auto key = GetIndexKey(tuple.GetValue(index.GetMetadata().GetColumnIndex()));
                 if (!key) { continue; }
+                index.GetTree().ValidateKey(*key);
                 if (index.GetTree().IsUnique() && index.GetTree().GetValue(*key)) {
                     throw std::invalid_argument("Unique index key already exists");
                 }
@@ -257,7 +249,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             ExecutionResult result{PlanType::IndexRangeScan};
             result.output_schema = output;
             if (ReachedLimit(scan.GetLimit(), 0)) { return result; }
-            const auto entries = index.GetTree().ScanRange(
+            const auto entries = index.GetTree().ScanKeys(
                 scan.GetLowerBound(), scan.IsLowerInclusive(),
                 scan.GetUpperBound(), scan.IsUpperInclusive());
             std::vector<Tuple> tuples;
@@ -331,7 +323,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             auto& heap = catalog_.GetTableHeap(deletion.GetTableId());
             struct DeleteMatch {
                 RID rid;
-                std::vector<std::pair<index_id_t, std::int64_t>> keys;
+                std::vector<std::pair<index_id_t, IndexKey>> keys;
             };
             std::vector<DeleteMatch> matches;
             const auto table_indexes = catalog_.GetTableIndexes(deletion.GetTableId());
@@ -426,6 +418,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
                     if (!assigned[column_index]) { continue; }
                     const auto old_key = GetIndexKey(tuple.GetValue(column_index));
                     const auto new_key = GetIndexKey(replacement.GetValue(column_index));
+                    if (new_key) { index.GetTree().ValidateKey(*new_key); }
                     if (old_key != new_key) {
                         pending.index_changes.push_back(IndexChange{index_id, *rid, old_key, new_key});
                     }
@@ -433,7 +426,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
                 replacements.push_back(std::move(pending));
             }
 
-            std::map<index_id_t, std::map<std::int64_t, RID>> proposed_keys;
+            std::map<index_id_t, std::map<IndexKey, RID>> proposed_keys;
             for (const auto& replacement : replacements) {
                 for (const auto& change : replacement.index_changes) {
                     if (!change.new_key || !catalog_.GetIndex(change.index_id).GetTree().IsUnique()) { continue; }

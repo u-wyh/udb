@@ -2,6 +2,7 @@
 
 #include "udb/b_plus_tree.h"
 #include "udb/table_metadata.h"
+#include "udb/value.h"
 
 #include <memory>
 #include <string>
@@ -9,6 +10,14 @@
 namespace udb {
 
 using index_id_t = std::uint64_t;
+
+inline std::optional<IndexKey> GetIndexKey(const Value& value) {
+    if (value.IsNull()) { return std::nullopt; }
+    if (value.GetType() == TypeId::INTEGER) { return IndexKey(value.GetInteger()); }
+    if (value.GetType() == TypeId::BIGINT) { return IndexKey(value.GetBigInt()); }
+    if (value.GetType() == TypeId::VARCHAR) { return IndexKey(value.GetVarchar()); }
+    throw std::invalid_argument("Unsupported index key type");
+}
 
 // Descriptive index data only. header_page_id remains stable across root splits.
 class IndexMetadata {

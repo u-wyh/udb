@@ -133,7 +133,7 @@ private:
 
 class IndexScanPlan final : public PlanNode {
 public:
-    IndexScanPlan(table_id_t table_id, index_id_t index_id, std::int64_t key,
+    IndexScanPlan(table_id_t table_id, index_id_t index_id, IndexKey key,
                   std::vector<std::size_t> indexes, Schema output_schema,
                   BoundExpressionPtr predicate,
                   std::vector<PlanOrderBy> order_by = {},
@@ -146,7 +146,7 @@ public:
           projections_(std::move(projections)) {}
     table_id_t GetTableId() const { return table_id_; }
     index_id_t GetIndexId() const { return index_id_; }
-    std::int64_t GetKey() const { return key_; }
+    IndexKey GetKey() const { return key_; }
     const std::vector<std::size_t>& GetColumnIndexes() const { return indexes_; }
     const BoundExpressionPtr& GetPredicate() const { return predicate_; }
     const std::vector<PlanOrderBy>& GetOrderBy() const { return order_by_; }
@@ -157,7 +157,7 @@ public:
 private:
     table_id_t table_id_;
     index_id_t index_id_;
-    std::int64_t key_;
+    IndexKey key_;
     std::vector<std::size_t> indexes_;
     BoundExpressionPtr predicate_;
     std::vector<PlanOrderBy> order_by_;
@@ -169,8 +169,8 @@ private:
 class IndexRangeScanPlan final : public PlanNode {
 public:
     IndexRangeScanPlan(table_id_t table_id, index_id_t index_id,
-                       std::optional<std::int64_t> lower, bool lower_inclusive,
-                       std::optional<std::int64_t> upper, bool upper_inclusive,
+                       std::optional<IndexKey> lower, bool lower_inclusive,
+                       std::optional<IndexKey> upper, bool upper_inclusive,
                        std::vector<std::size_t> indexes, Schema output_schema,
                        BoundExpressionPtr predicate,
                        std::vector<PlanOrderBy> order_by = {},
@@ -184,8 +184,8 @@ public:
           order_by_(order_by), limit_(limit), offset_(offset), projections_(std::move(projections)) {}
     table_id_t GetTableId() const { return table_id_; }
     index_id_t GetIndexId() const { return index_id_; }
-    const std::optional<std::int64_t>& GetLowerBound() const { return lower_; }
-    const std::optional<std::int64_t>& GetUpperBound() const { return upper_; }
+    const std::optional<IndexKey>& GetLowerBound() const { return lower_; }
+    const std::optional<IndexKey>& GetUpperBound() const { return upper_; }
     bool IsLowerInclusive() const { return lower_inclusive_; }
     bool IsUpperInclusive() const { return upper_inclusive_; }
     const std::vector<std::size_t>& GetColumnIndexes() const { return indexes_; }
@@ -198,8 +198,8 @@ public:
 private:
     table_id_t table_id_;
     index_id_t index_id_;
-    std::optional<std::int64_t> lower_;
-    std::optional<std::int64_t> upper_;
+    std::optional<IndexKey> lower_;
+    std::optional<IndexKey> upper_;
     bool lower_inclusive_;
     bool upper_inclusive_;
     std::vector<std::size_t> indexes_;

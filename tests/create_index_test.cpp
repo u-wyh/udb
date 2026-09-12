@@ -73,7 +73,7 @@ void TestParserBinderPlanner(const std::filesystem::path& path) {
     Catalog catalog(pool);
     const auto& users = catalog.CreateTable("users", Schema({
         Column("id", TypeId::INTEGER), Column("big", TypeId::BIGINT),
-        Column("name", TypeId::VARCHAR, 20)}));
+        Column("name", TypeId::VARCHAR, 20), Column("flag", TypeId::BOOLEAN)}));
     const Binder binder(catalog);
     const auto bound = std::get<BoundCreateIndexStatement>(binder.Bind(Statement{ast}));
     Check(bound.index_name == "idx_users_id" && bound.table_id == users.GetTableId() &&
@@ -85,7 +85,7 @@ void TestParserBinderPlanner(const std::filesystem::path& path) {
           catalog.ListIndexes().empty(), "CREATE INDEX planning changed catalog or lost binding");
     Reject<BindError>([&] { binder.Bind(Parser::Parse("CREATE INDEX x ON missing(id)")); });
     Reject<BindError>([&] { binder.Bind(Parser::Parse("CREATE INDEX x ON users(missing)")); });
-    Reject<BindError>([&] { binder.Bind(Parser::Parse("CREATE INDEX x ON users(name)")); });
+    Reject<BindError>([&] { binder.Bind(Parser::Parse("CREATE INDEX x ON users(flag)")); });
 
     catalog.CreateIndex("idx_users_id", users.GetTableId(), 0, BPlusTreeOptions{3, 3});
     Reject<BindError>([&] { binder.Bind(Parser::Parse("CREATE INDEX idx_users_id ON users(big)")); });
@@ -139,7 +139,8 @@ void TestSqlBuildAndPersistence(const std::filesystem::path& path) {
               "BIGINT boundary index lookup failed");
         Reject<BindError>([&] { engine.ExecuteSQL("CREATE INDEX idx_i ON numbers(b)"); });
         Reject<BindError>([&] { engine.ExecuteSQL("CREATE INDEX idx_i2 ON numbers(i)"); });
-        Reject<BindError>([&] { engine.ExecuteSQL("CREATE INDEX idx_note ON numbers(note)"); });
+        engine.ExecuteSQL("CREATE TABLE flags (flag BOOLEAN)");
+        Reject<BindError>([&] { engine.ExecuteSQL("CREATE INDEX idx_flag ON flags(flag)"); });
 
         engine.ExecuteSQL("CREATE TABLE duplicates (id INTEGER)");
         engine.ExecuteSQL("INSERT INTO duplicates VALUES (1)");

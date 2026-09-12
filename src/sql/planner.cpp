@@ -10,12 +10,12 @@ namespace {
 
 struct EqualityCandidate {
     std::size_t column_index;
-    std::int64_t key;
+    IndexKey key;
 };
 
 struct RangeCandidate {
-    std::optional<std::int64_t> lower;
-    std::optional<std::int64_t> upper;
+    std::optional<IndexKey> lower;
+    std::optional<IndexKey> upper;
     bool lower_inclusive = false;
     bool upper_inclusive = false;
 };
@@ -32,7 +32,7 @@ ComparisonOperator Reverse(ComparisonOperator op) {
     throw std::logic_error("Unknown comparison operator");
 }
 
-void SetLowerBound(RangeCandidate& range, std::int64_t key, bool inclusive) {
+void SetLowerBound(RangeCandidate& range, IndexKey key, bool inclusive) {
     if (!range.lower || key > *range.lower ||
         (key == *range.lower && !inclusive && range.lower_inclusive)) {
         range.lower = key;
@@ -40,7 +40,7 @@ void SetLowerBound(RangeCandidate& range, std::int64_t key, bool inclusive) {
     }
 }
 
-void SetUpperBound(RangeCandidate& range, std::int64_t key, bool inclusive) {
+void SetUpperBound(RangeCandidate& range, IndexKey key, bool inclusive) {
     if (!range.upper || key < *range.upper ||
         (key == *range.upper && !inclusive && range.upper_inclusive)) {
         range.upper = key;
@@ -77,6 +77,8 @@ void CollectEqualityCandidates(const BoundExpressionPtr& expression,
                               static_cast<std::int64_t>(literal->value.GetInteger())});
     } else if (literal->value.GetType() == TypeId::BIGINT) {
         candidates.push_back({column->column_index, literal->value.GetBigInt()});
+    } else if (literal->value.GetType() == TypeId::VARCHAR) {
+        candidates.push_back({column->column_index, IndexKey(literal->value.GetVarchar())});
     }
 }
 
@@ -106,11 +108,13 @@ void CollectRangeCandidates(const BoundExpressionPtr& expression,
         op == ComparisonOperator::Equal || op == ComparisonOperator::NotEqual) {
         return;
     }
-    std::int64_t key;
+    IndexKey key;
     if (literal->value.GetType() == TypeId::INTEGER) {
         key = literal->value.GetInteger();
     } else if (literal->value.GetType() == TypeId::BIGINT) {
         key = literal->value.GetBigInt();
+    } else if (literal->value.GetType() == TypeId::VARCHAR) {
+        key = IndexKey(literal->value.GetVarchar());
     } else {
         return;
     }
@@ -196,11 +200,13 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement,
     std::vector<EqualityCandidate> candidates;
     CollectEqualityCandidates(statement.predicate, candidates);
     std::optional<index_id_t> selected_index;
-    std::optional<std::int64_t> selected_key;
+    std::optional<IndexKey> selected_key;
     const auto table_indexes = catalog.GetTableIndexes(statement.table_id);
     for (const auto& candidate : candidates) {
         for (const auto index_id : table_indexes) {
             const auto& metadata = catalog.GetIndex(index_id).GetMetadata();
+            if (candidate.key.IsString() && candidate.key.GetString().size() >
+                catalog.GetIndex(index_id).GetTree().GetStringMaxLength()) { continue; }
             if (metadata.GetColumnIndex() == candidate.column_index &&
                 (!selected_index || index_id < *selected_index)) {
                 selected_index = index_id;
@@ -222,6 +228,9 @@ std::unique_ptr<PlanNode> Build(const BoundSelectStatement& statement,
     for (const auto& [column_index, range] : ranges) {
         for (const auto index_id : table_indexes) {
             const auto& metadata = catalog.GetIndex(index_id).GetMetadata();
+            const auto max_length = catalog.GetIndex(index_id).GetTree().GetStringMaxLength();
+            if ((range.lower && range.lower->IsString() && range.lower->GetString().size() > max_length) ||
+                (range.upper && range.upper->IsString() && range.upper->GetString().size() > max_length)) { continue; }
             if (metadata.GetColumnIndex() == column_index &&
                 (!selected_index || index_id < *selected_index)) {
                 selected_index = index_id;

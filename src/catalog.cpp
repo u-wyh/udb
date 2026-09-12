@@ -38,7 +38,7 @@ void Catalog::RestoreIndex(const IndexMetadata& metadata) {
         throw std::runtime_error("Metadata index column is out of range");
     }
     const auto type = schema.GetColumn(metadata.GetColumnIndex()).GetType();
-    if (type != TypeId::INTEGER && type != TypeId::BIGINT) {
+    if (type != TypeId::INTEGER && type != TypeId::BIGINT && type != TypeId::VARCHAR) {
         throw std::runtime_error("Metadata index column type is unsupported");
     }
     for (const auto& item : indexes_) {
@@ -51,6 +51,9 @@ void Catalog::RestoreIndex(const IndexMetadata& metadata) {
         }
     }
     auto tree = BPlusTree::OpenWithHeader(pool_, metadata.GetHeaderPageId());
+    if (tree->GetStringMaxLength() != (type == TypeId::VARCHAR ? schema.GetColumn(metadata.GetColumnIndex()).GetMaxLength() : 0)) {
+        throw std::runtime_error("Index key format does not match column");
+    }
     indexes_.emplace(metadata.GetIndexId(),
                      std::unique_ptr<Index>(new Index(metadata, std::move(tree))));
 }
@@ -141,9 +144,11 @@ const Index& Catalog::CreateIndex(const std::string& name, table_id_t table_id,
         throw std::out_of_range("Index column is out of range");
     }
     const auto type = schema.GetColumn(column_index).GetType();
-    if (type != TypeId::INTEGER && type != TypeId::BIGINT) {
-        throw std::invalid_argument("Index column must be INTEGER or BIGINT");
+    if (type != TypeId::INTEGER && type != TypeId::BIGINT && type != TypeId::VARCHAR) {
+        throw std::invalid_argument("Index column must be INTEGER, BIGINT or VARCHAR");
     }
+    options.string_max_length = type == TypeId::VARCHAR ? schema.GetColumn(column_index).GetMaxLength() : 0;
+    if (options.string_max_length > 1024) { throw std::invalid_argument("VARCHAR index key exceeds 1024 bytes"); }
     for (const auto& item : indexes_) {
         const auto& metadata = item.second->GetMetadata();
         if (metadata.GetIndexName() == name) { throw std::invalid_argument("Index name already exists"); }
@@ -163,9 +168,7 @@ const Index& Catalog::CreateIndex(const std::string& name, table_id_t table_id,
         const auto tuple = Tuple::Deserialize(heap.GetRecord(*rid), schema);
         const auto& value = tuple.GetValue(column_index);
         if (value.IsNull()) { continue; }
-        const auto key = type == TypeId::INTEGER
-            ? static_cast<std::int64_t>(value.GetInteger()) : value.GetBigInt();
-        if (!tree->Insert(key, *rid)) {
+        if (!tree->Insert(*GetIndexKey(value), *rid)) {
             throw std::invalid_argument("Cannot build unique index from duplicate values");
         }
     }
