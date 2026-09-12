@@ -296,3 +296,11 @@
 - 测试结果：全新构建无警告，35 / 35 测试及 ASan / UBSan 通过，覆盖选择规则、残余过滤与结果一致性，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 36：Executor Operator 抽象。
+
+## 阶段 36：Executor Operator 抽象
+
+- 做了什么：提取扫描、过滤、投影算子并接入 Executor。
+- 关键设计：算子拥有子输入，复用 BoundExpression；暂按批次执行，保持排序分页及显式刷盘语义。
+- 测试结果：全新构建无警告，36 / 36 测试及 ASan / UBSan 通过，覆盖算子组合、NULL、二进制数据与异常后页面访问，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 37：Iterator Execution。

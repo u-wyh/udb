@@ -1,4 +1,5 @@
 #include "udb/sql/executor.h"
+#include "udb/sql/operator.h"
 
 #include <algorithm>
 #include <limits>
@@ -159,27 +160,7 @@ void CheckScan(const Schema& source, const Schema& output,
 }
 
 bool Matches(const BoundExpressionPtr& predicate, const Tuple& tuple) {
-    if (!predicate) { return true; }
-    const auto value = EvaluateExpression(*predicate, tuple);
-    if (value.GetType() != TypeId::BOOLEAN) {
-        throw std::invalid_argument("Predicate did not evaluate to BOOLEAN");
-    }
-    return !value.IsNull() && value.GetBoolean();
-}
-
-Tuple Project(const Tuple& tuple, const Schema& output,
-              const std::vector<std::size_t>& indexes,
-              const std::vector<BoundExpressionPtr>& projections) {
-    std::vector<Value> values;
-    values.reserve(output.GetColumnCount());
-    if (!projections.empty()) {
-        for (const auto& expression : projections) {
-            values.push_back(EvaluateExpression(*expression, tuple));
-        }
-    } else {
-        for (const auto index : indexes) { values.push_back(tuple.GetValue(index)); }
-    }
-    return Tuple(output, std::move(values));
+    return FilterOperator::Matches(predicate, tuple);
 }
 
 bool ReachedLimit(const std::optional<std::size_t>& limit, std::size_t row_count) {
@@ -244,11 +225,15 @@ void FinishScan(ExecutionResult& result, std::vector<Tuple> tuples,
         std::stable_sort(tuples.begin(), tuples.end(),
             [&order_by](const Tuple& a, const Tuple& b) { return OrderLess(a, b, order_by); });
     }
+    std::vector<Tuple> selected;
     for (std::size_t position = 0; position < tuples.size(); ++position) {
         if (position < offset) { continue; }
-        if (ReachedLimit(limit, result.rows.size())) { break; }
-        result.rows.push_back(Project(tuples[position], output, indexes, projections));
+        if (ReachedLimit(limit, selected.size())) { break; }
+        selected.push_back(std::move(tuples[position]));
     }
+    ProjectionOperator projection(std::make_unique<MaterializedOperator>(std::move(selected)),
+                                  output, indexes, projections);
+    result.rows = projection.Execute();
 }
 
 }  // namespace
@@ -313,13 +298,9 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             ExecutionResult result{PlanType::SeqScan};
             result.output_schema = output;
             if (ReachedLimit(scan.GetLimit(), 0)) { return result; }
-            std::vector<Tuple> tuples;
             const auto& heap = catalog_.GetTableHeap(scan.GetTableId());
-            for (auto rid = heap.GetFirstRID(); rid; rid = heap.GetNextRID(*rid)) {
-                const auto tuple = Tuple::Deserialize(heap.GetRecord(*rid), source);
-                if (Matches(predicate, tuple)) { tuples.push_back(tuple); }
-            }
-            FinishScan(result, std::move(tuples), output, indexes,
+            FilterOperator filter(std::make_unique<TableScanOperator>(heap, source), predicate);
+            FinishScan(result, filter.Execute(), output, indexes,
                        scan.GetOrderBy(), scan.GetLimit(), scan.GetOffset(), scan.GetProjections());
             return result;
         }
