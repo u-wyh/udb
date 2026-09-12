@@ -299,8 +299,14 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             result.output_schema = output;
             if (ReachedLimit(scan.GetLimit(), 0)) { return result; }
             const auto& heap = catalog_.GetTableHeap(scan.GetTableId());
-            FilterOperator filter(std::make_unique<TableScanOperator>(heap, source), predicate);
-            FinishScan(result, filter.Execute(), output, indexes,
+            auto filter = std::make_unique<FilterOperator>(std::make_unique<TableScanOperator>(heap, source), predicate);
+            if (scan.GetOrderBy().empty()) {
+                auto limit = std::make_unique<LimitOperator>(std::move(filter), scan.GetLimit(), scan.GetOffset());
+                ProjectionOperator projection(std::move(limit), output, indexes, scan.GetProjections());
+                result.rows = projection.Execute();
+                return result;
+            }
+            FinishScan(result, filter->Execute(), output, indexes,
                        scan.GetOrderBy(), scan.GetLimit(), scan.GetOffset(), scan.GetProjections());
             return result;
         }

@@ -2,12 +2,22 @@
 
 namespace udb::sql {
 
-std::vector<Tuple> TableScanOperator::Execute() {
+std::vector<Tuple> ExecutionOperator::Execute() {
+    Init();
     std::vector<Tuple> rows;
-    for (auto rid = heap_.GetFirstRID(); rid; rid = heap_.GetNextRID(*rid)) {
-        rows.push_back(Tuple::Deserialize(heap_.GetRecord(*rid), schema_));
-    }
+    while (auto row = Next()) { rows.push_back(std::move(*row)); }
     return rows;
+}
+
+std::optional<Tuple> TableScanOperator::Next() {
+    RequireInitialized();
+    if (ended_) { return std::nullopt; }
+    const auto rid = started_ ? heap_.GetNextRID(*current_) : heap_.GetFirstRID();
+    if (!rid) { ended_ = true; return std::nullopt; }
+    auto row = Tuple::Deserialize(heap_.GetRecord(*rid), schema_);
+    current_ = rid;
+    started_ = true;
+    return row;
 }
 
 FilterOperator::FilterOperator(std::unique_ptr<ExecutionOperator> input, BoundExpressionPtr predicate)
@@ -27,13 +37,12 @@ bool FilterOperator::Matches(const BoundExpressionPtr& predicate, const Tuple& t
     return !value.IsNull() && value.GetBoolean();
 }
 
-std::vector<Tuple> FilterOperator::Execute() {
-    auto rows = input_->Execute();
-    std::vector<Tuple> result;
-    for (auto& row : rows) {
-        if (Matches(predicate_, row)) { result.push_back(std::move(row)); }
+std::optional<Tuple> FilterOperator::Next() {
+    RequireInitialized();
+    while (auto row = input_->Next()) {
+        if (Matches(predicate_, *row)) { return row; }
     }
-    return result;
+    return std::nullopt;
 }
 
 ProjectionOperator::ProjectionOperator(std::unique_ptr<ExecutionOperator> input, Schema output,
@@ -50,21 +59,45 @@ ProjectionOperator::ProjectionOperator(std::unique_ptr<ExecutionOperator> input,
     }
 }
 
-std::vector<Tuple> ProjectionOperator::Execute() {
-    auto rows = input_->Execute();
-    std::vector<Tuple> result;
-    result.reserve(rows.size());
-    for (const auto& row : rows) {
-        std::vector<Value> values;
-        values.reserve(output_.GetColumnCount());
-        if (!expressions_.empty()) {
-            for (const auto& expression : expressions_) { values.push_back(EvaluateExpression(*expression, row)); }
-        } else {
-            for (const auto index : indexes_) { values.push_back(row.GetValue(index)); }
-        }
-        result.emplace_back(output_, std::move(values));
+std::optional<Tuple> ProjectionOperator::Next() {
+    RequireInitialized();
+    const auto row = input_->Next();
+    if (!row) { return std::nullopt; }
+    std::vector<Value> values;
+    values.reserve(output_.GetColumnCount());
+    if (!expressions_.empty()) {
+        for (const auto& expression : expressions_) { values.push_back(EvaluateExpression(*expression, *row)); }
+    } else {
+        for (const auto index : indexes_) { values.push_back(row->GetValue(index)); }
     }
-    return result;
+    return Tuple(output_, std::move(values));
+}
+
+LimitOperator::LimitOperator(std::unique_ptr<ExecutionOperator> input,
+                            std::optional<std::size_t> limit, std::size_t offset)
+    : input_(std::move(input)), limit_(limit), offset_(offset) {
+    if (!input_) { throw std::invalid_argument("Limit requires an input"); }
+}
+
+void LimitOperator::Init() {
+    input_->Init();
+    skipped_ = 0;
+    emitted_ = 0;
+    ended_ = false;
+    initialized_ = true;
+}
+
+std::optional<Tuple> LimitOperator::Next() {
+    RequireInitialized();
+    if (ended_ || (limit_ && emitted_ >= *limit_)) { return std::nullopt; }
+    while (skipped_ < offset_) {
+        if (!input_->Next()) { ended_ = true; return std::nullopt; }
+        ++skipped_;
+    }
+    auto row = input_->Next();
+    if (!row) { ended_ = true; return std::nullopt; }
+    ++emitted_;
+    return row;
 }
 
 }  // namespace udb::sql

@@ -304,3 +304,11 @@
 - 测试结果：全新构建无警告，36 / 36 测试及 ASan / UBSan 通过，覆盖算子组合、NULL、二进制数据与异常后页面访问，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 37：Iterator Execution。
+
+## 阶段 37：Iterator Execution
+
+- 做了什么：算子提供 Init / Next，无排序顺序查询按行执行过滤、分页与投影。
+- 关键设计：Execute 仅收集最终输出；LIMIT 停止拉取输入；扫描不跨调用持有 page pin，支持重置。
+- 测试结果：全新构建无警告，37 / 37 测试及 ASan / UBSan 通过，覆盖惰性读取、提前结束、重置和单 frame 交错访问，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 38：Sort / Aggregate / Join 统一 pipeline。
