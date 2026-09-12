@@ -5,6 +5,7 @@
 #include <limits>
 #include <stdexcept>
 #include <tuple>
+#include <set>
 #include <unordered_set>
 
 namespace udb {
@@ -239,7 +240,7 @@ page_id_t BPlusTree::NewHeaderPage() {
     PinnedPage page(pool_);
     Page encoded;
     Write(encoded, 0, 8, kHeaderMagic);
-    Write(encoded, 8, 4, kHeaderVersion);
+    Write(encoded, 8, 4, options_.unique ? kHeaderVersion : 2);
     Write(encoded, 16, 8, EncodePageId(root_page_id_));
     Write(encoded, 24, 8, options_.leaf_max_size);
     Write(encoded, 32, 8, options_.internal_max_size);
@@ -252,7 +253,7 @@ void BPlusTree::WriteHeader() {
     if (header_page_id_ < 0) { return; }
     Page encoded;
     Write(encoded, 0, 8, kHeaderMagic);
-    Write(encoded, 8, 4, kHeaderVersion);
+    Write(encoded, 8, 4, options_.unique ? kHeaderVersion : 2);
     Write(encoded, 16, 8, EncodePageId(root_page_id_));
     Write(encoded, 24, 8, options_.leaf_max_size);
     Write(encoded, 32, 8, options_.internal_max_size);
@@ -266,10 +267,12 @@ page_id_t BPlusTree::ReadHeader(BufferPoolManager& pool, page_id_t header_page_i
     if (header_page_id < 0) { throw std::invalid_argument("B+ tree header page ID must be nonnegative"); }
     PinnedPage page(pool, header_page_id);
     const auto& bytes = page.GetPage();
-    if (Read(bytes, 0, 8) != kHeaderMagic || Read(bytes, 8, 4) != kHeaderVersion ||
+    const auto version = Read(bytes, 8, 4);
+    if (Read(bytes, 0, 8) != kHeaderMagic || (version != kHeaderVersion && version != 2) ||
         Read(bytes, 12, 4) != 0) {
         throw std::runtime_error("Invalid B+ tree header page");
     }
+    if (options) { options->unique = version == kHeaderVersion; }
     const auto root = DecodePageId(Read(bytes, 16, 8));
     if (root < 0) { throw std::runtime_error("Invalid B+ tree root in header"); }
     const auto leaf_max_size = static_cast<std::size_t>(Read(bytes, 24, 8));
@@ -297,14 +300,128 @@ page_id_t BPlusTree::FindLeaf(std::int64_t key, std::vector<page_id_t>* path) co
     }
 }
 
+std::vector<RID> BPlusTree::ReadPostings(page_id_t head, std::vector<page_id_t>* pages) const {
+    constexpr std::uint32_t magic = 0x31545350;  // PST1
+    std::vector<RID> result;
+    std::unordered_set<page_id_t> seen;
+    std::set<std::pair<page_id_t, slot_id_t>> rids;
+    while (head != -1) {
+        if (!seen.insert(head).second) { throw std::runtime_error("Posting page cycle"); }
+        PinnedPage pinned(pool_, head);
+        const auto& page = pinned.GetPage();
+        const auto count = Read(page, 4, 4);
+        if (Read(page, 0, 4) != magic || count == 0 || count > (PAGE_SIZE - 16) / 16) {
+            throw std::runtime_error("Invalid posting page");
+        }
+        if (pages) { pages->push_back(head); }
+        for (std::size_t i = 0; i < count; ++i) {
+            const auto id = DecodePageId(Read(page, 16 + i * 16, 8));
+            const auto slot = static_cast<slot_id_t>(Read(page, 24 + i * 16, 2));
+            if (id < 0 || !rids.emplace(id, slot).second) { throw std::runtime_error("Invalid duplicate posting RID"); }
+            result.push_back(RID{id, slot});
+        }
+        head = DecodePageId(Read(page, 8, 8));
+    }
+    if (result.empty()) { throw std::runtime_error("Empty posting list"); }
+    return result;
+}
+
+page_id_t BPlusTree::WritePostings(const std::vector<RID>& values, std::vector<page_id_t> pages) {
+    constexpr std::size_t capacity = (PAGE_SIZE - 16) / 16;
+    if (values.empty()) { throw std::invalid_argument("Posting list cannot be empty"); }
+    const auto required = (values.size() - 1) / capacity + 1;
+    while (pages.size() < required) {
+        PinnedPage page(pool_);
+        pages.push_back(page.GetPageId());
+    }
+    for (std::size_t n = required; n > 0; --n) {
+        const auto i = n - 1;
+        Page encoded;
+        Write(encoded, 0, 4, 0x31545350);
+        const auto count = std::min(capacity, values.size() - i * capacity);
+        Write(encoded, 4, 4, count);
+        Write(encoded, 8, 8, EncodePageId(i + 1 < required ? pages[i + 1] : -1));
+        for (std::size_t j = 0; j < count; ++j) {
+            const auto& rid = values[i * capacity + j];
+            Write(encoded, 16 + j * 16, 8, EncodePageId(rid.page_id));
+            Write(encoded, 24 + j * 16, 2, rid.slot_id);
+        }
+        PinnedPage page(pool_, pages[i]);
+        page.GetPage() = encoded;
+        page.MarkDirty();
+    }
+    for (std::size_t i = required; i < pages.size(); ++i) { DeleteNode(pages[i]); }
+    return pages.front();
+}
+
+std::vector<RID> BPlusTree::GetValues(std::int64_t key) const {
+    const auto value = FindValue(key);
+    if (!value) { return {}; }
+    return options_.unique ? std::vector<RID>{*value} : ReadPostings(value->page_id);
+}
+
 std::optional<RID> BPlusTree::GetValue(std::int64_t key) const {
+    const auto values = GetValues(key);
+    return values.empty() ? std::nullopt : std::optional<RID>(values.front());
+}
+
+std::vector<std::pair<std::int64_t, RID>> BPlusTree::ScanRange(
+    std::optional<std::int64_t> lower, bool lower_inclusive,
+    std::optional<std::int64_t> upper, bool upper_inclusive) const {
+    auto entries = ScanEntries(lower, lower_inclusive, upper, upper_inclusive);
+    if (options_.unique) { return entries; }
+    std::vector<std::pair<std::int64_t, RID>> result;
+    for (const auto& [key, head] : entries) {
+        for (const auto rid : ReadPostings(head.page_id)) { result.emplace_back(key, rid); }
+    }
+    return result;
+}
+
+bool BPlusTree::Insert(std::int64_t key, RID rid) {
+    if (options_.unique) { return InsertKey(key, rid); }
+    if (rid.page_id < 0) { throw std::invalid_argument("Invalid RID page ID"); }
+    const auto head = FindValue(key);
+    std::vector<page_id_t> pages;
+    auto values = head ? ReadPostings(head->page_id, &pages) : std::vector<RID>{};
+    if (std::find(values.begin(), values.end(), rid) != values.end()) { return false; }
+    values.push_back(rid);
+    const auto id = WritePostings(values, std::move(pages));
+    return head ? true : InsertKey(key, RID{id, 0});
+}
+
+bool BPlusTree::Remove(std::int64_t key) {
+    if (options_.unique) { return RemoveKey(key); }
+    const auto head = FindValue(key);
+    if (!head) { return false; }
+    std::vector<page_id_t> pages;
+    ReadPostings(head->page_id, &pages);
+    if (!RemoveKey(key)) { throw std::runtime_error("Missing posting key"); }
+    for (const auto page : pages) { DeleteNode(page); }
+    return true;
+}
+
+bool BPlusTree::Remove(std::int64_t key, RID rid) {
+    const auto head = FindValue(key);
+    if (!head) { return false; }
+    if (options_.unique) { return *head == rid && RemoveKey(key); }
+    std::vector<page_id_t> pages;
+    auto values = ReadPostings(head->page_id, &pages);
+    const auto found = std::find(values.begin(), values.end(), rid);
+    if (found == values.end()) { return false; }
+    values.erase(found);
+    if (values.empty()) { return Remove(key); }
+    WritePostings(values, std::move(pages));
+    return true;
+}
+
+std::optional<RID> BPlusTree::FindValue(std::int64_t key) const {
     const auto leaf = ReadNode(FindLeaf(key, nullptr));
     const auto found = std::lower_bound(leaf.keys.begin(), leaf.keys.end(), key);
     if (found == leaf.keys.end() || *found != key) { return std::nullopt; }
     return leaf.values[static_cast<std::size_t>(found - leaf.keys.begin())];
 }
 
-std::vector<std::pair<std::int64_t, RID>> BPlusTree::ScanRange(
+std::vector<std::pair<std::int64_t, RID>> BPlusTree::ScanEntries(
     std::optional<std::int64_t> lower, bool lower_inclusive,
     std::optional<std::int64_t> upper, bool upper_inclusive) const {
     std::vector<std::pair<std::int64_t, RID>> result;
@@ -343,7 +460,7 @@ std::vector<std::pair<std::int64_t, RID>> BPlusTree::ScanRange(
     return result;
 }
 
-bool BPlusTree::Insert(std::int64_t key, RID rid) {
+bool BPlusTree::InsertKey(std::int64_t key, RID rid) {
     if (rid.page_id < 0) { throw std::invalid_argument("B+ tree RID page ID must be nonnegative"); }
     std::vector<page_id_t> path;
     const auto leaf_page_id = FindLeaf(key, &path);
@@ -373,7 +490,7 @@ bool BPlusTree::Insert(std::int64_t key, RID rid) {
     return true;
 }
 
-bool BPlusTree::Remove(std::int64_t key) {
+bool BPlusTree::RemoveKey(std::int64_t key) {
     const auto leaf_page_id = FindLeaf(key, nullptr);
     auto leaf = ReadNode(leaf_page_id);
     const auto position = std::lower_bound(leaf.keys.begin(), leaf.keys.end(), key);
@@ -407,6 +524,11 @@ std::vector<page_id_t> BPlusTree::CollectNodePageIds() const {
 void BPlusTree::DeletePages() {
     Validate();
     auto page_ids = CollectNodePageIds();
+    if (!options_.unique) {
+        for (const auto& entry : ScanEntries(std::nullopt, true, std::nullopt, true)) {
+            ReadPostings(entry.second.page_id, &page_ids);
+        }
+    }
     if (header_page_id_ >= 0) {
         if (std::find(page_ids.begin(), page_ids.end(), header_page_id_) != page_ids.end()) {
             throw std::runtime_error("B+ tree header aliases a node page");
@@ -703,6 +825,19 @@ void BPlusTree::Validate() const {
         return Info{children.front().minimum, children.back().maximum, true, children.front().height + 1};
     };
     visit(root_page_id_, -1);
+    if (!options_.unique) {
+        auto node_ids = CollectNodePageIds();
+        std::unordered_set<page_id_t> owned(node_ids.begin(), node_ids.end());
+        if (header_page_id_ >= 0) { owned.insert(header_page_id_); }
+        for (const auto& entry : ScanEntries(std::nullopt, true, std::nullopt, true)) {
+            if (entry.second.slot_id != 0) { throw std::runtime_error("Invalid posting pointer"); }
+            std::vector<page_id_t> pages;
+            ReadPostings(entry.second.page_id, &pages);
+            for (const auto page : pages) {
+                if (!owned.insert(page).second) { throw std::runtime_error("Shared posting page"); }
+            }
+        }
+    }
     if (header_page_id_ >= 0 && ReadHeader(pool_, header_page_id_) != root_page_id_) {
         throw std::runtime_error("B+ tree header root is stale");
     }

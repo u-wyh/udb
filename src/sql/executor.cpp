@@ -188,7 +188,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
                 const auto& index = catalog_.GetIndex(index_id);
                 const auto key = GetIndexKey(tuple.GetValue(index.GetMetadata().GetColumnIndex()));
                 if (!key) { continue; }
-                if (index.GetTree().GetValue(*key)) {
+                if (index.GetTree().IsUnique() && index.GetTree().GetValue(*key)) {
                     throw std::invalid_argument("Unique index key already exists");
                 }
                 index_keys.emplace_back(index_id, *key);
@@ -233,12 +233,12 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             ExecutionResult result{PlanType::IndexScan};
             result.output_schema = output;
             if (ReachedLimit(scan.GetLimit(), 0)) { return result; }
-            const auto rid = index.GetTree().GetValue(scan.GetKey());
-            if (!rid) { return result; }
-            const auto tuple = Tuple::Deserialize(
-                catalog_.GetTableHeap(scan.GetTableId()).GetRecord(*rid), source);
             std::vector<Tuple> tuples;
-            if (Matches(predicate, tuple)) { tuples.push_back(tuple); }
+            for (const auto rid : index.GetTree().GetValues(scan.GetKey())) {
+                const auto tuple = Tuple::Deserialize(
+                    catalog_.GetTableHeap(scan.GetTableId()).GetRecord(rid), source);
+                if (Matches(predicate, tuple)) { tuples.push_back(tuple); }
+            }
             FinishPipeline(result, std::make_unique<MaterializedOperator>(std::move(tuples)), output, indexes,
                        scan.GetOrderBy(), scan.GetLimit(), scan.GetOffset(), scan.GetProjections());
             return result;
@@ -358,7 +358,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             }
             for (const auto& match : matches) {
                 for (const auto& [index_id, key] : match.keys) {
-                    if (!catalog_.GetIndex(index_id).GetTree().Remove(key)) {
+                    if (!catalog_.GetIndex(index_id).GetTree().Remove(key, match.rid)) {
                         throw std::runtime_error("Index is missing key for deleted tuple");
                     }
                 }
@@ -436,7 +436,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             std::map<index_id_t, std::map<std::int64_t, RID>> proposed_keys;
             for (const auto& replacement : replacements) {
                 for (const auto& change : replacement.index_changes) {
-                    if (!change.new_key) { continue; }
+                    if (!change.new_key || !catalog_.GetIndex(change.index_id).GetTree().IsUnique()) { continue; }
                     const auto [position, inserted] =
                         proposed_keys[change.index_id].emplace(*change.new_key, change.rid);
                     if (!inserted && position->second != change.rid) {
@@ -455,7 +455,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
                 }
                 for (const auto& change : replacement.index_changes) {
                     auto& tree = catalog_.GetIndex(change.index_id).GetTree();
-                    if (change.old_key && !tree.Remove(*change.old_key)) {
+                    if (change.old_key && !tree.Remove(*change.old_key, change.rid)) {
                         throw std::runtime_error("Index is missing old key for updated tuple");
                     }
                     if (change.new_key && !tree.Insert(*change.new_key, change.rid)) {

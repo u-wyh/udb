@@ -320,3 +320,11 @@
 - 测试结果：全新构建无警告，38 / 38 测试及 ASan / UBSan 通过，覆盖组合、重置、提前结束及原 SQL 回归，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 39：Non-unique B+ Tree Index。
+
+## 阶段 39：Non-unique B+ Tree Index
+
+- 做了什么：通过 Catalog options 支持非唯一索引，DML、精确与范围扫描维护/返回全部 RID。
+- 关键设计：唯一 key 节点结构不变，重复值使用可回收 RID 列表页；header 持久化模式并兼容旧 unique 索引；SQL 建索引默认行为不变。
+- 测试结果：全新构建无警告，39 / 39 测试及 ASan / UBSan 通过，覆盖列表跨页、乱序删除、回收、多索引 DML 与重开，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 40：VARCHAR Index。

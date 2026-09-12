@@ -22,9 +22,10 @@ struct BPlusTreeOptions {
 
     std::size_t leaf_max_size = LEAF_CAPACITY;
     std::size_t internal_max_size = INTERNAL_CAPACITY;
+    bool unique = true;
 };
 
-// Single-threaded persistent int64_t -> RID B+ tree. All pages are accessed
+// Single-threaded persistent int64_t -> RID(s) B+ tree. All pages are accessed
 // through the supplied BufferPoolManager. The caller persists root_page_id.
 class BPlusTree {
 public:
@@ -41,14 +42,18 @@ public:
     page_id_t GetRootPageId() const { return root_page_id_; }
     page_id_t GetHeaderPageId() const { return header_page_id_; }
     std::optional<RID> GetValue(std::int64_t key) const;
+    std::vector<RID> GetValues(std::int64_t key) const;
+    bool IsUnique() const { return options_.unique; }
     // Results are ordered by key. Missing bounds denote an open end.
     std::vector<std::pair<std::int64_t, RID>> ScanRange(
         std::optional<std::int64_t> lower, bool lower_inclusive,
         std::optional<std::int64_t> upper, bool upper_inclusive) const;
-    // Duplicate keys return false without changing the tree.
+    // Unique mode rejects duplicate keys; non-unique mode rejects duplicate pairs.
     bool Insert(std::int64_t key, RID rid);
-    // Missing keys return false without changing the tree.
+    // Removes all RIDs for the key. Missing keys return false.
     bool Remove(std::int64_t key);
+    // Removes just one key/RID pair (also valid for unique trees).
+    bool Remove(std::int64_t key, RID rid);
     // Explicit ownership teardown for DROP INDEX. The object is unusable after success.
     void DeletePages();
 
@@ -58,6 +63,15 @@ public:
 
 private:
     struct Node;
+
+    std::optional<RID> FindValue(std::int64_t key) const;
+    bool InsertKey(std::int64_t key, RID rid);
+    bool RemoveKey(std::int64_t key);
+    std::vector<std::pair<std::int64_t, RID>> ScanEntries(
+        std::optional<std::int64_t> lower, bool lower_inclusive,
+        std::optional<std::int64_t> upper, bool upper_inclusive) const;
+    std::vector<RID> ReadPostings(page_id_t head, std::vector<page_id_t>* pages = nullptr) const;
+    page_id_t WritePostings(const std::vector<RID>& values, std::vector<page_id_t> pages);
 
     void ValidateOptions() const;
     Node ReadNode(page_id_t page_id) const;
