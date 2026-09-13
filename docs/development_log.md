@@ -496,3 +496,11 @@
 - 测试结果：全新构建无警告，60 / 60 测试及 ASan / UBSan 通过，综合场景连续重复 20 次通过，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：STOP；按 roadmap 停止，等待 MVCC 前架构评审。
+
+## 阶段 61：Same-page Transaction Safety
+
+- 做了什么：为事务写入增加 page lifetime ownership，防止同一物理页上不同 RID 的整页回滚互相覆盖。
+- 关键设计：写页、新页和删页由首个事务持有至 COMMIT durable 或 ROLLBACK 完成；后继写者等待所有权释放；RID 与 Record/Tuple 格式不变。
+- 测试结果：全新构建无警告，61 / 61 测试及 ASan / UBSan 通过，同页 abort/commit/crash 场景连续重复 20 次通过，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 62：MVCC Timestamp Core。

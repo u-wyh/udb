@@ -5,6 +5,8 @@
 #include "udb/page_guard.h"
 
 #include <exception>
+#include <condition_variable>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -53,6 +55,9 @@ public:
     void ThrowIfWriteError();
     void SetActiveTransaction(Transaction* transaction);
     void RollbackTransaction(Transaction& transaction);
+    // A transaction retains ownership of every page it changes so a later
+    // full-page rollback cannot erase another transaction's committed bytes.
+    void ReleaseTransactionPages(Transaction& transaction);
 
 private:
     struct Frame {
@@ -78,6 +83,9 @@ private:
     bool CanDeletePageLocked(page_id_t page_id) const;
     bool DeletePageLocked(page_id_t page_id);
     Transaction* GetActiveTransaction() const;
+    void WaitForPageOwnerLocked(std::unique_lock<std::mutex>& lock,
+                                page_id_t page_id, Transaction* transaction);
+    void ClaimPageLocked(page_id_t page_id, Transaction* transaction);
 
     DiskManager& disk_;
     LogManager* log_manager_;
@@ -86,6 +94,8 @@ private:
     std::exception_ptr write_error_;
     std::vector<Frame> frames_;
     std::unordered_map<page_id_t, std::size_t> page_table_;
+    std::map<page_id_t, Transaction*> page_write_owners_;
+    std::condition_variable page_owner_condition_;
     // All frame indices, least to most recently fetched/created. Bounded O(n)
     // scans keep LRU simple; unpinning does not count as a page access.
     std::vector<std::size_t> lru_;

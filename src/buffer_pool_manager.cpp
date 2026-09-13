@@ -105,7 +105,8 @@ Page* BufferPoolManager::FetchPageLocked(page_id_t page_id) {
 }
 
 std::pair<page_id_t, Page*> BufferPoolManager::NewPage() {
-    const std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
+    WaitForPageOwnerLocked(lock, disk_.GetNextPageId(), GetActiveTransaction());
     return NewPageLocked();
 }
 
@@ -134,6 +135,7 @@ std::pair<page_id_t, Page*> BufferPoolManager::NewPageLocked() {
         }
     }
     auto* page = Install(index, page_id, Page{});
+    ClaimPageLocked(page_id, active_transaction);
     frames_[index].page_lsn = allocation_lsn;
     return {page_id, page};
 }
@@ -159,8 +161,10 @@ WritePageGuard BufferPoolManager::WritePage(page_id_t page_id) {
     Page* page = nullptr;
     std::shared_mutex* latch = nullptr;
     {
-        const std::lock_guard<std::mutex> lock(mutex_);
+        std::unique_lock<std::mutex> lock(mutex_);
+        WaitForPageOwnerLocked(lock, page_id, GetActiveTransaction());
         page = FetchPageLocked(page_id);
+        ClaimPageLocked(page_id, GetActiveTransaction());
         auto& frame = frames_[page_table_.at(page_id)];
         ++frame.write_guard_count;
         latch = &frame.latch;
@@ -185,7 +189,8 @@ WritePageGuard BufferPoolManager::WritePage(page_id_t page_id) {
 }
 
 WritePageGuard BufferPoolManager::NewPageGuard() {
-    const std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
+    WaitForPageOwnerLocked(lock, disk_.GetNextPageId(), GetActiveTransaction());
     const auto [page_id, page] = NewPageLocked();
     auto& frame = frames_[page_table_.at(page_id)];
     ++frame.write_guard_count;
@@ -288,7 +293,11 @@ bool BufferPoolManager::CanDeletePageLocked(page_id_t page_id) const {
 }
 
 bool BufferPoolManager::DeletePage(page_id_t page_id) {
-    const std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
+    auto* transaction = GetActiveTransaction();
+    WaitForPageOwnerLocked(lock, page_id, transaction);
+    if (!CanDeletePageLocked(page_id)) { return false; }
+    ClaimPageLocked(page_id, transaction);
     return DeletePageLocked(page_id);
 }
 
@@ -348,6 +357,32 @@ void BufferPoolManager::SetActiveTransaction(Transaction* transaction) {
     }
     if (transaction == nullptr) { active_transactions_.erase(this); }
     else { active_transactions_[this] = transaction; }
+}
+
+void BufferPoolManager::WaitForPageOwnerLocked(std::unique_lock<std::mutex>& lock,
+                                               page_id_t page_id,
+                                               Transaction* transaction) {
+    page_owner_condition_.wait(lock, [&] {
+        const auto owner = page_write_owners_.find(page_id);
+        return owner == page_write_owners_.end() || owner->second == transaction;
+    });
+}
+
+void BufferPoolManager::ClaimPageLocked(page_id_t page_id, Transaction* transaction) {
+    if (transaction == nullptr) { return; }
+    const auto [owner, inserted] = page_write_owners_.emplace(page_id, transaction);
+    if (!inserted && owner->second != transaction) {
+        throw std::logic_error("Page write ownership changed unexpectedly");
+    }
+}
+
+void BufferPoolManager::ReleaseTransactionPages(Transaction& transaction) {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    for (auto owner = page_write_owners_.begin(); owner != page_write_owners_.end();) {
+        if (owner->second == &transaction) { owner = page_write_owners_.erase(owner); }
+        else { ++owner; }
+    }
+    page_owner_condition_.notify_all();
 }
 
 void BufferPoolManager::RollbackTransaction(Transaction& transaction) {

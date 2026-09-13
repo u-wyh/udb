@@ -48,6 +48,7 @@ void TransactionManager::Commit(Transaction& transaction) {
     managed.allocated_pages_.clear();
     managed.freed_pages_.clear();
     managed.state_ = TransactionState::Committed;
+    if (pool_ != nullptr) { pool_->ReleaseTransactionPages(managed); }
     if (lock_manager_ != nullptr) { lock_manager_->UnlockAll(managed); }
 }
 
@@ -65,6 +66,7 @@ void TransactionManager::Abort(Transaction& transaction,
     managed.freed_pages_.clear();
     managed.state_ = TransactionState::Aborted;
     if (before_unlock) { before_unlock(); }
+    if (pool_ != nullptr) { pool_->ReleaseTransactionPages(managed); }
     if (lock_manager_ != nullptr) { lock_manager_->UnlockAll(managed); }
 }
 
