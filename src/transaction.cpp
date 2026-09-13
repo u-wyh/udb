@@ -153,6 +153,7 @@ void TransactionManager::Commit(Transaction& transaction) {
     managed.allocated_pages_.clear();
     managed.freed_pages_.clear();
     managed.write_rids_.clear();
+    managed.stale_index_entries_.clear();
     managed.state_ = TransactionState::Committed;
     if (pool_ != nullptr) { pool_->ReleaseTransactionPages(managed); }
     if (lock_manager_ != nullptr) { lock_manager_->UnlockAll(managed); }
@@ -216,6 +217,31 @@ void TransactionManager::CheckWriteConflict(Transaction& transaction,
         return;
     }
     if (current_meta.timestamp > managed.GetReadTimestamp()) { throw WriteConflictError(); }
+}
+
+void TransactionManager::RegisterStaleIndexEntry(Transaction& transaction,
+                                                 std::uint64_t index_id,
+                                                 const IndexKey& key, RID rid) {
+    auto& managed = RequireManaged(transaction);
+    if (!managed.IsActive()) { throw std::logic_error("Transaction is not active"); }
+    if (rid.page_id < 0) { throw std::invalid_argument("Stale index entry requires a valid RID"); }
+    const StaleIndexEntry entry{index_id, key, rid};
+    const std::lock_guard<std::mutex> lock(undo_mutex_);
+    if (stale_index_entries_.insert(entry).second) {
+        managed.stale_index_entries_.insert(entry);
+    }
+}
+
+std::vector<std::pair<IndexKey, RID>> TransactionManager::GetStaleIndexEntries(
+    std::uint64_t index_id) const {
+    const std::lock_guard<std::mutex> lock(undo_mutex_);
+    std::vector<std::pair<IndexKey, RID>> result;
+    for (const auto& entry : stale_index_entries_) {
+        if (entry.index_id < index_id) { continue; }
+        if (entry.index_id > index_id) { break; }
+        result.emplace_back(entry.key, entry.rid);
+    }
+    return result;
 }
 
 std::optional<VersionLink> TransactionManager::GetVersionLink(RID rid) const {
@@ -297,6 +323,10 @@ void TransactionManager::DiscardUndoRecords(Transaction& transaction) {
             version_links_.erase(current);
         }
     }
+    for (const auto& entry : transaction.stale_index_entries_) {
+        stale_index_entries_.erase(entry);
+    }
+    transaction.stale_index_entries_.clear();
     transaction.undo_records_.clear();
 }
 

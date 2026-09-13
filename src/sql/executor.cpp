@@ -127,6 +127,56 @@ bool Matches(const BoundExpressionPtr& predicate, const Tuple& tuple) {
     return FilterOperator::Matches(predicate, tuple);
 }
 
+TransactionManager* SnapshotVersions(const ExecutionContext* context) {
+    if (context == nullptr || context->GetTransaction().GetIsolationLevel() !=
+                                  IsolationLevel::SnapshotIsolation) {
+        return nullptr;
+    }
+    auto* versions = context->GetTransactionManager();
+    if (versions == nullptr) { throw std::logic_error("Snapshot scan requires a TransactionManager"); }
+    return versions;
+}
+
+std::vector<RID> VersionAwareExactLookup(const Index& index, const IndexKey& key,
+                                         const ExecutionContext* context) {
+    auto rids = index.GetTree().GetValues(key);
+    if (auto* versions = SnapshotVersions(context)) {
+        for (const auto& [stale_key, rid] :
+             versions->GetStaleIndexEntries(index.GetMetadata().GetIndexId())) {
+            if (stale_key == key) { rids.push_back(rid); }
+        }
+    }
+    std::sort(rids.begin(), rids.end());
+    rids.erase(std::unique(rids.begin(), rids.end()), rids.end());
+    return rids;
+}
+
+bool InIndexRange(const IndexKey& key, const std::optional<IndexKey>& lower,
+                  bool lower_inclusive, const std::optional<IndexKey>& upper,
+                  bool upper_inclusive) {
+    if (lower && (key < *lower || (key == *lower && !lower_inclusive))) { return false; }
+    if (upper && (key > *upper || (key == *upper && !upper_inclusive))) { return false; }
+    return true;
+}
+
+std::vector<std::pair<IndexKey, RID>> VersionAwareRangeLookup(
+    const Index& index, const std::optional<IndexKey>& lower, bool lower_inclusive,
+    const std::optional<IndexKey>& upper, bool upper_inclusive,
+    const ExecutionContext* context) {
+    auto entries = index.GetTree().ScanKeys(lower, lower_inclusive, upper, upper_inclusive);
+    if (auto* versions = SnapshotVersions(context)) {
+        for (const auto& entry : versions->GetStaleIndexEntries(
+                 index.GetMetadata().GetIndexId())) {
+            if (InIndexRange(entry.first, lower, lower_inclusive, upper, upper_inclusive)) {
+                entries.push_back(entry);
+            }
+        }
+    }
+    std::sort(entries.begin(), entries.end());
+    entries.erase(std::unique(entries.begin(), entries.end()), entries.end());
+    return entries;
+}
+
 std::optional<Tuple> ReadTuple(const TableHeap& heap, RID rid, const Schema& schema,
                                const ExecutionContext* context) {
     auto record = heap.GetRecord(rid);
@@ -377,7 +427,7 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
             if (ReachedLimit(scan.GetLimit(), 0)) { return result; }
             std::vector<Tuple> tuples;
             const auto& heap = catalog_.GetTableHeap(scan.GetTableId());
-            for (const auto rid : index.GetTree().GetValues(scan.GetKey())) {
+            for (const auto rid : VersionAwareExactLookup(index, scan.GetKey(), context)) {
                 const auto tuple = ReadTuple(heap, rid, source, context);
                 if (tuple && Matches(predicate, *tuple)) { tuples.push_back(*tuple); }
             }
@@ -399,9 +449,9 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
             ExecutionResult result{PlanType::IndexRangeScan};
             result.output_schema = output;
             if (ReachedLimit(scan.GetLimit(), 0)) { return result; }
-            const auto entries = index.GetTree().ScanKeys(
-                scan.GetLowerBound(), scan.IsLowerInclusive(),
-                scan.GetUpperBound(), scan.IsUpperInclusive());
+            const auto entries = VersionAwareRangeLookup(
+                index, scan.GetLowerBound(), scan.IsLowerInclusive(),
+                scan.GetUpperBound(), scan.IsUpperInclusive(), context);
             std::vector<Tuple> tuples;
             const auto& heap = catalog_.GetTableHeap(scan.GetTableId());
             for (const auto& [key, rid] : entries) {
@@ -432,13 +482,14 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
                                IsolationLevel::SnapshotIsolation) {
                 std::vector<std::pair<IndexKey, RID>> entries;
                 if (scan.GetExactKey()) {
-                    for (const auto rid : index.GetTree().GetValues(*scan.GetExactKey())) {
+                    for (const auto rid : VersionAwareExactLookup(
+                             index, *scan.GetExactKey(), context)) {
                         entries.emplace_back(*scan.GetExactKey(), rid);
                     }
                 } else {
-                    entries = index.GetTree().ScanKeys(
-                        scan.GetLowerBound(), scan.IsLowerInclusive(),
-                        scan.GetUpperBound(), scan.IsUpperInclusive());
+                    entries = VersionAwareRangeLookup(
+                        index, scan.GetLowerBound(), scan.IsLowerInclusive(),
+                        scan.GetUpperBound(), scan.IsUpperInclusive(), context);
                 }
                 std::vector<Tuple> rows;
                 const auto& heap = catalog_.GetTableHeap(scan.GetTableId());
@@ -572,6 +623,10 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
                                                  heap.GetTupleMeta(match.rid));
                 }
                 for (const auto& [index_id, key] : match.keys) {
+                    if (versions) {
+                        versions->RegisterStaleIndexEntry(context->GetTransaction(),
+                                                          index_id, key, match.rid);
+                    }
                     if (!catalog_.GetIndex(index_id).GetTree().Remove(key, match.rid)) {
                         throw std::runtime_error("Index is missing key for deleted tuple");
                     }
@@ -705,6 +760,11 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
                 }
                 for (const auto& change : replacement.index_changes) {
                     auto& tree = catalog_.GetIndex(change.index_id).GetTree();
+                    if (versions && change.old_key) {
+                        versions->RegisterStaleIndexEntry(context->GetTransaction(),
+                                                          change.index_id, *change.old_key,
+                                                          change.rid);
+                    }
                     if (change.old_key && !tree.Remove(*change.old_key, change.rid)) {
                         throw std::runtime_error("Index is missing old key for updated tuple");
                     }

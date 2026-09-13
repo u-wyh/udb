@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "udb/page.h"
+#include "udb/index_key.h"
 #include "udb/record.h"
 #include "udb/rid.h"
 #include "udb/table_metadata.h"
@@ -64,6 +65,18 @@ struct RecordVersion {
     TupleMeta meta;
 };
 
+struct StaleIndexEntry {
+    std::uint64_t index_id;
+    IndexKey key;
+    RID rid;
+
+    friend bool operator<(const StaleIndexEntry& left, const StaleIndexEntry& right) {
+        if (left.index_id != right.index_id) { return left.index_id < right.index_id; }
+        if (left.key != right.key) { return left.key < right.key; }
+        return left.rid < right.rid;
+    }
+};
+
 struct RowLockId {
     table_id_t table_id;
     RID rid;
@@ -110,6 +123,7 @@ private:
     std::set<RowLockId> exclusive_row_locks_;
     std::vector<UndoRecord> undo_records_;
     std::set<RID> write_rids_;
+    std::set<StaleIndexEntry> stale_index_entries_;
 };
 
 class TransactionManager {
@@ -134,6 +148,10 @@ public:
                                  const Record& record, TupleMeta meta);
     void RegisterWrite(Transaction& transaction, RID rid);
     void CheckWriteConflict(Transaction& transaction, TupleMeta current_meta);
+    void RegisterStaleIndexEntry(Transaction& transaction, std::uint64_t index_id,
+                                 const IndexKey& key, RID rid);
+    std::vector<std::pair<IndexKey, RID>> GetStaleIndexEntries(
+        std::uint64_t index_id) const;
     std::optional<VersionLink> GetVersionLink(RID rid) const;
     UndoRecord GetUndoRecord(VersionLink link) const;
     std::optional<RecordVersion> ReconstructVersion(RID rid, const Record& current,
@@ -154,6 +172,7 @@ private:
     mutable std::mutex transactions_mutex_;
     mutable std::mutex undo_mutex_;
     std::map<RID, VersionLink> version_links_;
+    std::set<StaleIndexEntry> stale_index_entries_;
     BufferPoolManager* pool_;
     LogManager* log_manager_;
     LockManager* lock_manager_;

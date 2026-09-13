@@ -560,3 +560,11 @@
 - 测试结果：全新构建无警告，68 / 68 测试及 ASan / UBSan 通过，覆盖 lost update、首写者回滚、unique 冲突、逻辑删除冲突与共享版本链，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 69：Version-aware Index。
+
+## 阶段 69：Version-aware Index
+
+- 做了什么：索引更新与删除保留旧 snapshot 所需的 stale entry，并让精确、范围及回表式 index-only 路径合并这些候选项。
+- 关键设计：stale entry 由共享 TransactionManager 按 index/key/RID 管理；事务回滚移除自身登记，提交后保留；所有候选 RID 均回表做版本可见性和完整 predicate 校验。
+- 测试结果：全新构建无警告，69 / 69 测试及 ASan / UBSan 通过，覆盖 unique、non-unique、INTEGER、BIGINT、VARCHAR、复合索引、NULL、DELETE 与回滚，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 70：MVCC Index-only Scan。
