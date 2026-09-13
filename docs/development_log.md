@@ -416,3 +416,11 @@
 - 测试结果：全新构建无警告，50 / 50 测试及 ASan / UBSan 通过，覆盖全类型编解码、重开续写、损坏/截断校验和数据库生命周期，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 51：Write-Ahead Rule。
+
+## 阶段 51：Write-Ahead Rule
+
+- 做了什么：WritePageGuard 接入整页 WAL，页面分配/释放和事务生命周期自动写日志，并强制写前持久化顺序。
+- 关键设计：frame 记录最新 LSN；脏页落盘前确保 WAL durable；COMMIT 记录 fsync 后才确认，Guard 析构错误延迟到安全边界传播。
+- 测试结果：全新构建无警告，51 / 51 测试及 ASan / UBSan 通过，覆盖 before/after image、淘汰/显式刷页顺序、allocate/free、COMMIT/ABORT 与重开，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 52：Crash Recovery。

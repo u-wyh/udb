@@ -10,6 +10,7 @@
 namespace udb {
 
 class BufferPoolManager;
+class LogManager;
 
 using transaction_id_t = std::uint64_t;
 
@@ -34,7 +35,9 @@ private:
 
 class TransactionManager {
 public:
-    explicit TransactionManager(BufferPoolManager* pool = nullptr) : pool_(pool) {}
+    explicit TransactionManager(BufferPoolManager* pool = nullptr,
+                                LogManager* log_manager = nullptr)
+        : pool_(pool), log_manager_(log_manager) {}
     Transaction& Begin();
     void Commit(Transaction& transaction);
     void Abort(Transaction& transaction);
@@ -47,6 +50,7 @@ private:
     transaction_id_t next_id_ = 0;
     std::map<transaction_id_t, std::unique_ptr<Transaction>> transactions_;
     BufferPoolManager* pool_;
+    LogManager* log_manager_;
 };
 
 }  // namespace udb

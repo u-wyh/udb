@@ -7,8 +7,9 @@
 
 namespace udb {
 
-BufferPoolManager::BufferPoolManager(DiskManager& disk, std::size_t capacity)
-    : disk_(disk), frames_(capacity), lru_(capacity) {
+BufferPoolManager::BufferPoolManager(DiskManager& disk, std::size_t capacity,
+                                     LogManager* log_manager)
+    : disk_(disk), log_manager_(log_manager), frames_(capacity), lru_(capacity) {
     if (capacity == 0) {
         throw std::invalid_argument("Buffer pool capacity must be positive");
     }
@@ -39,9 +40,18 @@ void BufferPoolManager::Touch(std::size_t index) {
 void BufferPoolManager::WriteBack(std::size_t index) {
     auto& frame = frames_[index];
     if (frame.in_use && frame.dirty) {
+        ThrowIfWriteError();
+        EnsureWalDurable(frame);
         disk_.WritePage(frame.page_id, frame.page);
         frame.dirty = false;
     }
+}
+
+void BufferPoolManager::EnsureWalDurable(const Frame& frame) {
+    if (!frame.page_lsn) { return; }
+    if (log_manager_ == nullptr) { throw std::logic_error("Page has an LSN without a log manager"); }
+    const auto persistent = log_manager_->GetPersistentLsn();
+    if (!persistent || *persistent < *frame.page_lsn) { log_manager_->Flush(); }
 }
 
 Page* BufferPoolManager::Install(std::size_t index, page_id_t page_id, const Page& page) {
@@ -52,7 +62,7 @@ Page* BufferPoolManager::Install(std::size_t index, page_id_t page_id, const Pag
     if (frame.in_use) {
         page_table_.erase(frame.page_id);
     }
-    frame = Frame{page_id, page, 1, false, true};
+    frame = Frame{page_id, page, 1, 0, false, true, std::nullopt};
     Touch(index);
     return &frame.page;
 }
@@ -79,8 +89,28 @@ std::pair<page_id_t, Page*> BufferPoolManager::NewPage() {
     // Check capacity before allocating: an all-pinned failure must not grow disk.
     const auto index = SelectFrame();
     WriteBack(index);
+    const auto expected_page_id = disk_.GetNextPageId();
+    std::optional<lsn_t> allocation_lsn;
+    if (active_transaction_ != nullptr && log_manager_ != nullptr) {
+        allocation_lsn = log_manager_->Append(
+            LogRecord::PageAllocate(active_transaction_->GetId(), expected_page_id));
+        // AllocatePage zeroes the physical page, so its log must be durable first.
+        log_manager_->Flush();
+    }
     const auto page_id = disk_.AllocatePage();
-    return {page_id, Install(index, page_id, Page{})};
+    if (page_id != expected_page_id) { throw std::logic_error("Disk page allocation changed unexpectedly"); }
+    if (active_transaction_ != nullptr &&
+        active_transaction_->freed_pages_.count(page_id) == 0) {
+        try {
+            active_transaction_->allocated_pages_.insert(page_id);
+        } catch (...) {
+            disk_.DeallocatePage(page_id);
+            throw;
+        }
+    }
+    auto* page = Install(index, page_id, Page{});
+    frames_[index].page_lsn = allocation_lsn;
+    return {page_id, page};
 }
 
 ReadPageGuard BufferPoolManager::ReadPage(page_id_t page_id) {
@@ -90,11 +120,16 @@ ReadPageGuard BufferPoolManager::ReadPage(page_id_t page_id) {
 WritePageGuard BufferPoolManager::WritePage(page_id_t page_id) {
     auto* page = FetchPage(page_id);
     try {
+        auto& frame = frames_[page_table_.at(page_id)];
+        if (frame.write_guard_count != 0) {
+            throw std::logic_error("Page already has a write guard");
+        }
         if (active_transaction_ != nullptr &&
             active_transaction_->allocated_pages_.count(page_id) == 0 &&
             active_transaction_->freed_pages_.count(page_id) == 0) {
             active_transaction_->before_images_.emplace(page_id, *page);
         }
+        ++frame.write_guard_count;
     } catch (...) {
         UnpinPage(page_id, false);
         throw;
@@ -104,21 +139,49 @@ WritePageGuard BufferPoolManager::WritePage(page_id_t page_id) {
 
 WritePageGuard BufferPoolManager::NewPageGuard() {
     const auto [page_id, page] = NewPage();
-    if (active_transaction_ != nullptr) {
+    ++frames_[page_table_.at(page_id)].write_guard_count;
+    return WritePageGuard(*this, page_id, page);
+}
+
+void BufferPoolManager::CompleteWrite(page_id_t page_id, const Page& before,
+                                      const Page& after) noexcept {
+    const auto found = page_table_.find(page_id);
+    if (found == page_table_.end()) {
+        write_error_ = std::make_exception_ptr(std::logic_error("Guard page is not resident"));
+        return;
+    }
+    auto& frame = frames_[found->second];
+    const bool changed = before.data != after.data;
+    if (changed && active_transaction_ != nullptr && log_manager_ != nullptr) {
         try {
-            if (active_transaction_->freed_pages_.count(page_id) == 0) {
-                active_transaction_->allocated_pages_.insert(page_id);
-            }
+            frame.page_lsn = log_manager_->Append(
+                LogRecord::PageWrite(active_transaction_->GetId(), page_id, before, after));
         } catch (...) {
-            UnpinPage(page_id, false);
-            auto* transaction = active_transaction_;
-            active_transaction_ = nullptr;
-            DeletePage(page_id);
-            active_transaction_ = transaction;
-            throw;
+            if (!write_error_) { write_error_ = std::current_exception(); }
         }
     }
-    return WritePageGuard(*this, page_id, page);
+    if (frame.pin_count == 0) {
+        if (!write_error_) {
+            write_error_ = std::make_exception_ptr(std::logic_error("Guard page is already unpinned"));
+        }
+        return;
+    }
+    if (frame.write_guard_count == 0) {
+        if (!write_error_) {
+            write_error_ = std::make_exception_ptr(std::logic_error("Page has no write guard"));
+        }
+    } else {
+        --frame.write_guard_count;
+    }
+    --frame.pin_count;
+    frame.dirty = frame.dirty || changed;
+}
+
+void BufferPoolManager::ThrowIfWriteError() {
+    if (!write_error_) { return; }
+    auto error = write_error_;
+    write_error_ = nullptr;
+    std::rethrow_exception(error);
 }
 
 void BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty) {
@@ -132,6 +195,11 @@ void BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty) {
 
 void BufferPoolManager::FlushPage(page_id_t page_id) {
     auto& frame = frames_[page_table_.at(page_id)];
+    if (frame.write_guard_count != 0) {
+        throw std::logic_error("Cannot flush a page held by a write guard");
+    }
+    ThrowIfWriteError();
+    EnsureWalDurable(frame);
     disk_.WritePage(page_id, frame.page);
     frame.dirty = false;
 }
@@ -151,8 +219,16 @@ bool BufferPoolManager::CanDeletePage(page_id_t page_id) const {
 }
 
 bool BufferPoolManager::DeletePage(page_id_t page_id) {
+    ThrowIfWriteError();
     if (!CanDeletePage(page_id)) { return false; }
     const auto found = page_table_.find(page_id);
+    const auto current_page = found == page_table_.end()
+                                ? disk_.ReadPage(page_id)
+                                : frames_[found->second].page;
+    if (active_transaction_ != nullptr && log_manager_ != nullptr) {
+        log_manager_->Append(LogRecord::PageFree(active_transaction_->GetId(),
+                                                 page_id, current_page));
+    }
     if (active_transaction_ != nullptr) {
         if (active_transaction_->allocated_pages_.erase(page_id) == 0) {
             auto before = active_transaction_->before_images_.find(page_id);
@@ -160,9 +236,9 @@ bool BufferPoolManager::DeletePage(page_id_t page_id) {
                 active_transaction_->freed_pages_.emplace(page_id, before->second);
                 active_transaction_->before_images_.erase(before);
             } else if (found != page_table_.end()) {
-                active_transaction_->freed_pages_.emplace(page_id, frames_[found->second].page);
+                active_transaction_->freed_pages_.emplace(page_id, current_page);
             } else {
-                active_transaction_->freed_pages_.emplace(page_id, disk_.ReadPage(page_id));
+                active_transaction_->freed_pages_.emplace(page_id, current_page);
             }
         }
     }
@@ -194,6 +270,8 @@ void BufferPoolManager::RollbackTransaction(Transaction& transaction) {
         throw std::logic_error("Cannot roll back a different active transaction");
     }
     active_transaction_ = nullptr;
+    write_error_ = nullptr;
+    if (log_manager_ != nullptr) { log_manager_->Flush(); }
 
     for (const auto page_id : transaction.allocated_pages_) {
         if (disk_.IsPageAllocated(page_id) && !DeletePage(page_id)) {

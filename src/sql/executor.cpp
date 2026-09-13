@@ -537,6 +537,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan, ExecutionContext& contex
         ~ActiveTransactionReset() { pool.SetActiveTransaction(nullptr); }
     } reset{pool};
     auto result = Execute(plan);
+    pool.ThrowIfWriteError();
     result.transaction_id = transaction.GetId();
     return result;
 }

@@ -49,12 +49,13 @@ public:
 private:
     friend class BufferPoolManager;
     WritePageGuard(BufferPoolManager& pool, page_id_t page_id, Page* page)
-        : pool_(&pool), page_id_(page_id), page_(page) {}
+        : pool_(&pool), page_id_(page_id), page_(page), before_image_(*page) {}
     void Take(WritePageGuard&& other) noexcept;
 
     BufferPoolManager* pool_ = nullptr;
     page_id_t page_id_ = -1;
     Page* page_ = nullptr;
+    Page before_image_{};
 };
 
 }  // namespace udb

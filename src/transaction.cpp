@@ -1,5 +1,6 @@
 #include "udb/transaction.h"
 #include "udb/buffer_pool_manager.h"
+#include "udb/log_manager.h"
 
 #include <limits>
 #include <stdexcept>
@@ -12,6 +13,9 @@ Transaction& TransactionManager::Begin() {
     }
     auto transaction = std::unique_ptr<Transaction>(new Transaction(next_id_));
     auto* result = transaction.get();
+    if (log_manager_ != nullptr) {
+        log_manager_->Append(LogRecord::Begin(next_id_));
+    }
     transactions_.emplace(next_id_, std::move(transaction));
     ++next_id_;
     return *result;
@@ -28,6 +32,11 @@ Transaction& TransactionManager::RequireManaged(Transaction& transaction) {
 void TransactionManager::Commit(Transaction& transaction) {
     auto& managed = RequireManaged(transaction);
     if (!managed.IsActive()) { throw std::logic_error("Transaction is not active"); }
+    if (pool_ != nullptr) { pool_->ThrowIfWriteError(); }
+    if (log_manager_ != nullptr) {
+        log_manager_->Append(LogRecord::Commit(managed.GetId()));
+        log_manager_->Flush();
+    }
     managed.before_images_.clear();
     managed.allocated_pages_.clear();
     managed.freed_pages_.clear();
@@ -38,6 +47,10 @@ void TransactionManager::Abort(Transaction& transaction) {
     auto& managed = RequireManaged(transaction);
     if (!managed.IsActive()) { throw std::logic_error("Transaction is not active"); }
     if (pool_ != nullptr) { pool_->RollbackTransaction(managed); }
+    if (log_manager_ != nullptr) {
+        log_manager_->Append(LogRecord::Abort(managed.GetId()));
+        log_manager_->Flush();
+    }
     managed.before_images_.clear();
     managed.allocated_pages_.clear();
     managed.freed_pages_.clear();

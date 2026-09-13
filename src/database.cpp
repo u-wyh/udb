@@ -119,8 +119,8 @@ Database::Database(const std::filesystem::path& path, std::size_t capacity)
     : data_path_(path), metadata_path_(MetadataPath(path)),
       wal_path_(WalPath(path)), log_manager_(std::make_unique<LogManager>(wal_path_)),
       disk_(std::make_unique<DiskManager>(path)),
-      pool_(std::make_unique<BufferPoolManager>(*disk_, capacity)),
-      catalog_(std::make_unique<Catalog>(*pool_)) {}
+      pool_(std::make_unique<BufferPoolManager>(*disk_, capacity, log_manager_.get())),
+      catalog_(std::make_unique<Catalog>(*pool_, log_manager_.get())) {}
 
 std::unique_ptr<Database> Database::Create(const std::filesystem::path& path, std::size_t capacity) {
     const auto metadata = MetadataPath(path);

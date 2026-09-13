@@ -1,8 +1,11 @@
 #pragma once
 
 #include "udb/disk_manager.h"
+#include "udb/log_manager.h"
 #include "udb/page_guard.h"
 
+#include <exception>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -18,7 +21,8 @@ class Transaction;
 // Flush explicitly before destruction: the destructor does not perform fallible I/O.
 class BufferPoolManager {
 public:
-    BufferPoolManager(DiskManager& disk, std::size_t capacity);
+    BufferPoolManager(DiskManager& disk, std::size_t capacity,
+                      LogManager* log_manager = nullptr);
     BufferPoolManager(const BufferPoolManager&) = delete;
     BufferPoolManager& operator=(const BufferPoolManager&) = delete;
 
@@ -32,7 +36,7 @@ public:
     WritePageGuard NewPageGuard();
     // Missing resident IDs throw out_of_range; a zero pin count throws logic_error.
     void UnpinPage(page_id_t page_id, bool is_dirty);
-    // Explicit FlushPage writes even if clean (including currently pinned data).
+    // Explicit FlushPage writes even if clean. A live write guard is rejected.
     // Missing resident IDs throw out_of_range. FlushAllPages writes only dirty pages.
     void FlushPage(page_id_t page_id);
     void FlushAllPages();
@@ -40,6 +44,10 @@ public:
     // Invalid/free IDs throw through DiskManager. Dirty deleted pages are discarded.
     bool CanDeletePage(page_id_t page_id) const;
     bool DeletePage(page_id_t page_id);
+    // Guard completion hook. WAL failures are deferred until the executor or a
+    // flush boundary because guard destructors cannot propagate exceptions.
+    void CompleteWrite(page_id_t page_id, const Page& before, const Page& after) noexcept;
+    void ThrowIfWriteError();
     void SetActiveTransaction(Transaction* transaction);
     void RollbackTransaction(Transaction& transaction);
 
@@ -48,17 +56,22 @@ private:
         page_id_t page_id = -1;
         Page page;
         std::size_t pin_count = 0;
+        std::size_t write_guard_count = 0;
         bool dirty = false;
         bool in_use = false;
+        std::optional<lsn_t> page_lsn;
     };
 
     std::size_t SelectFrame() const;
     void Touch(std::size_t index);
     void WriteBack(std::size_t index);
+    void EnsureWalDurable(const Frame& frame);
     Page* Install(std::size_t index, page_id_t page_id, const Page& page);
 
     DiskManager& disk_;
+    LogManager* log_manager_;
     Transaction* active_transaction_ = nullptr;
+    std::exception_ptr write_error_;
     std::vector<Frame> frames_;
     std::unordered_map<page_id_t, std::size_t> page_table_;
     // All frame indices, least to most recently fetched/created. Bounded O(n)

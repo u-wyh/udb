@@ -32,6 +32,9 @@ public:
     Page ReadPage(page_id_t page_id);
 
     page_id_t GetPageCount() const { return page_count_; }
+    page_id_t GetNextPageId() const {
+        return free_pages_.empty() ? page_count_ : *free_pages_.begin();
+    }
     bool IsPageAllocated(page_id_t page_id) const;
     const std::set<page_id_t>& GetFreePageIds() const { return free_pages_; }
     // Used only while opening database metadata. Validation is atomic.

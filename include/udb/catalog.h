@@ -15,7 +15,8 @@ namespace udb {
 // no implicit flush or reload.
 class Catalog {
 public:
-    explicit Catalog(BufferPoolManager& pool) : pool_(pool) {}
+    explicit Catalog(BufferPoolManager& pool, LogManager* log_manager = nullptr)
+        : pool_(pool), log_manager_(log_manager) {}
     Catalog(const Catalog&) = delete;
     Catalog& operator=(const Catalog&) = delete;
 
@@ -35,6 +36,7 @@ public:
     const TableHeap& GetTableHeap(const std::string& name) const;
     std::vector<table_id_t> ListTables() const;  // Ascending ID order; snapshot.
     BufferPoolManager& GetBufferPoolManager() { return pool_; }
+    LogManager* GetLogManager() const { return log_manager_; }
     const TableStatistics& AnalyzeTable(table_id_t id);
     const TableStatistics& AnalyzeTable(const std::string& name);
     bool HasTableStatistics(table_id_t id) const;
@@ -75,6 +77,7 @@ private:
     };
 
     BufferPoolManager& pool_;
+    LogManager* log_manager_;
     table_id_t next_id_ = 0;
     index_id_t next_index_id_ = 0;
     // One authoritative map avoids partially updated name/ID indexes.

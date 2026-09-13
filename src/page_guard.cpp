@@ -55,6 +55,7 @@ void WritePageGuard::Take(WritePageGuard&& other) noexcept {
     pool_ = other.pool_;
     page_id_ = other.page_id_;
     page_ = other.page_;
+    before_image_ = other.before_image_;
     other.pool_ = nullptr;
     other.page_id_ = -1;
     other.page_ = nullptr;
@@ -79,10 +80,12 @@ void WritePageGuard::Drop() {
     if (!IsValid()) { return; }
     auto* pool = pool_;
     const auto page_id = page_id_;
+    const auto before = before_image_;
+    auto* page = page_;
     pool_ = nullptr;
     page_id_ = -1;
     page_ = nullptr;
-    pool->UnpinPage(page_id, true);
+    pool->CompleteWrite(page_id, before, *page);
 }
 
 }  // namespace udb
