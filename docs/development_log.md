@@ -504,3 +504,11 @@
 - 测试结果：全新构建无警告，61 / 61 测试及 ASan / UBSan 通过，同页 abort/commit/crash 场景连续重复 20 次通过，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 62：MVCC Timestamp Core。
+
+## 阶段 62：MVCC Timestamp Core
+
+- 做了什么：为 Transaction 增加 read_ts / commit_ts，并实现进程级 commit timestamp 与 active snapshot watermark。
+- 关键设计：BEGIN 捕获最近已发布提交时间；COMMIT 在 WAL durable 后串行分配时间戳；watermark 跟踪最老活动 read_ts，Manager 销毁时清理遗留登记。
+- 测试结果：全新构建无警告，62 / 62 测试及 ASan / UBSan 通过，并发时间戳场景连续重复 100 次通过，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 63：TupleMeta。

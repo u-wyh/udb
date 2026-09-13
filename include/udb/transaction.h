@@ -5,6 +5,8 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <set>
 
 #include "udb/page.h"
@@ -18,6 +20,7 @@ class LogManager;
 class LockManager;
 
 using transaction_id_t = std::uint64_t;
+using timestamp_t = std::uint64_t;
 
 enum class TransactionState { Active, Committed, Aborted };
 enum class IsolationLevel { ReadCommitted, RepeatableRead };
@@ -39,6 +42,8 @@ public:
     bool IsActive() const { return state_ == TransactionState::Active; }
     bool IsAbortRequested() const { return abort_requested_.load(); }
     IsolationLevel GetIsolationLevel() const { return isolation_level_; }
+    timestamp_t GetReadTimestamp() const { return read_ts_; }
+    std::optional<timestamp_t> GetCommitTimestamp() const { return commit_ts_; }
     const std::set<table_id_t>& GetSharedTableLocks() const { return shared_table_locks_; }
     const std::set<table_id_t>& GetExclusiveTableLocks() const { return exclusive_table_locks_; }
     const std::set<RowLockId>& GetSharedRowLocks() const { return shared_row_locks_; }
@@ -48,10 +53,12 @@ private:
     friend class TransactionManager;
     friend class BufferPoolManager;
     friend class LockManager;
-    Transaction(transaction_id_t id, IsolationLevel isolation_level)
-        : id_(id), isolation_level_(isolation_level) {}
+    Transaction(transaction_id_t id, IsolationLevel isolation_level, timestamp_t read_ts)
+        : id_(id), isolation_level_(isolation_level), read_ts_(read_ts) {}
     transaction_id_t id_;
     IsolationLevel isolation_level_;
+    timestamp_t read_ts_;
+    std::optional<timestamp_t> commit_ts_;
     TransactionState state_ = TransactionState::Active;
     std::atomic<bool> abort_requested_{false};
     std::map<page_id_t, Page> before_images_;
@@ -69,16 +76,24 @@ public:
                                 LogManager* log_manager = nullptr,
                                 LockManager* lock_manager = nullptr)
         : pool_(pool), log_manager_(log_manager), lock_manager_(lock_manager) {}
+    ~TransactionManager();
     Transaction& Begin(IsolationLevel isolation_level = IsolationLevel::RepeatableRead);
     void Commit(Transaction& transaction);
     void Abort(Transaction& transaction, const std::function<void()>& before_unlock = {});
     Transaction& GetTransaction(transaction_id_t id);
     const Transaction& GetTransaction(transaction_id_t id) const;
     std::size_t GetActiveCount() const;
+    static timestamp_t GetLastCommitTimestamp();
+    static timestamp_t GetWatermark();
 
 private:
     Transaction& RequireManaged(Transaction& transaction);
     static std::atomic<transaction_id_t> next_id_;
+    static std::mutex timestamp_mutex_;
+    static timestamp_t last_commit_ts_;
+    static std::map<timestamp_t, std::size_t> active_read_timestamps_;
+    static void RegisterReadTimestamp(timestamp_t timestamp);
+    static void UnregisterReadTimestamp(timestamp_t timestamp);
     std::map<transaction_id_t, std::unique_ptr<Transaction>> transactions_;
     BufferPoolManager* pool_;
     LogManager* log_manager_;
