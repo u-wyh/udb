@@ -456,3 +456,11 @@
 - 测试结果：全新构建无警告，55 / 55 测试及 ASan / UBSan 通过，并发跨页插入、索引分裂/删除/查询和 Catalog 发布压力测试通过，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 56：Lock Manager。
+
+## 阶段 56：Lock Manager
+
+- 做了什么：实现 table/row 级 Shared/Exclusive LockManager、阻塞等待、锁升级与事务持锁集合。
+- 关键设计：资源队列采用 FIFO 兼容性授予；同一资源只允许一个 S→X upgrader；transaction_id 在进程内跨 Manager 唯一。
+- 测试结果：全新构建无警告，56 / 56 测试及 ASan / UBSan 通过，覆盖兼容矩阵、等待唤醒、升级、独立行资源、UnlockAll 与错误边界，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 57：Strict 2PL。

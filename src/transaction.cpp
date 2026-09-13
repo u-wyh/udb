@@ -7,17 +7,22 @@
 
 namespace udb {
 
+std::atomic<transaction_id_t> TransactionManager::next_id_{0};
+
 Transaction& TransactionManager::Begin() {
-    if (next_id_ == std::numeric_limits<transaction_id_t>::max()) {
-        throw std::overflow_error("Transaction ID limit reached");
+    auto id = next_id_.load();
+    while (true) {
+        if (id == std::numeric_limits<transaction_id_t>::max()) {
+            throw std::overflow_error("Transaction ID limit reached");
+        }
+        if (next_id_.compare_exchange_weak(id, id + 1)) { break; }
     }
-    auto transaction = std::unique_ptr<Transaction>(new Transaction(next_id_));
+    auto transaction = std::unique_ptr<Transaction>(new Transaction(id));
     auto* result = transaction.get();
     if (log_manager_ != nullptr) {
-        log_manager_->Append(LogRecord::Begin(next_id_));
+        log_manager_->Append(LogRecord::Begin(id));
     }
-    transactions_.emplace(next_id_, std::move(transaction));
-    ++next_id_;
+    transactions_.emplace(id, std::move(transaction));
     return *result;
 }
 
