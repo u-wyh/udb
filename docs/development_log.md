@@ -480,3 +480,11 @@
 - 测试结果：全新构建无警告，58 / 58 测试及 ASan / UBSan 通过，覆盖等待图、确定性 victim、继续执行、数据回滚与 WAL ABORT，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 59：Isolation Levels。
+
+## 阶段 59：Isolation Levels
+
+- 做了什么：加入 READ COMMITTED 与 REPEATABLE READ 事务隔离级别，并让 SQL Engine 支持选择默认或 BEGIN 指定级别。
+- 关键设计：REPEATABLE READ 保留读锁至事务结束；READ COMMITTED 在只读语句结束释放新取得的 S 锁；两者的 X 锁都遵循 Strict 2PL。
+- 测试结果：全新构建无警告，59 / 59 测试及 ASan / UBSan 通过，覆盖 dirty read 阻断、non-repeatable read、repeatable read 和写锁保持，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 60：Concurrent Recovery Stress。

@@ -10,7 +10,7 @@ namespace udb {
 
 std::atomic<transaction_id_t> TransactionManager::next_id_{0};
 
-Transaction& TransactionManager::Begin() {
+Transaction& TransactionManager::Begin(IsolationLevel isolation_level) {
     auto id = next_id_.load();
     while (true) {
         if (id == std::numeric_limits<transaction_id_t>::max()) {
@@ -18,7 +18,7 @@ Transaction& TransactionManager::Begin() {
         }
         if (next_id_.compare_exchange_weak(id, id + 1)) { break; }
     }
-    auto transaction = std::unique_ptr<Transaction>(new Transaction(id));
+    auto transaction = std::unique_ptr<Transaction>(new Transaction(id, isolation_level));
     auto* result = transaction.get();
     if (log_manager_ != nullptr) {
         log_manager_->Append(LogRecord::Begin(id));

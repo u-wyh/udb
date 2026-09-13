@@ -160,14 +160,37 @@ void FinishPipeline(ExecutionResult& result, std::unique_ptr<ExecutionOperator> 
     result.rows = projection.Execute();
 }
 
-void AcquireExecutionLocks(const PlanNode& plan, ExecutionContext& context,
+class StatementLockGuard {
+public:
+    explicit StatementLockGuard(ExecutionContext& context)
+        : locks_(context.GetLockManager()), transaction_(context.GetTransaction()) {}
+    StatementLockGuard(const StatementLockGuard&) = delete;
+    StatementLockGuard& operator=(const StatementLockGuard&) = delete;
+    ~StatementLockGuard() {
+        if (locks_ == nullptr) { return; }
+        for (auto table = release_tables_.rbegin(); table != release_tables_.rend(); ++table) {
+            try { locks_->UnlockTable(transaction_, *table); } catch (...) {}
+        }
+    }
+    void LockTable(table_id_t id, LockMode mode) {
+        if (locks_ == nullptr) { return; }
+        const bool release = mode == LockMode::Shared &&
+            transaction_.GetIsolationLevel() == IsolationLevel::ReadCommitted &&
+            transaction_.GetSharedTableLocks().count(id) == 0 &&
+            transaction_.GetExclusiveTableLocks().count(id) == 0;
+        locks_->LockTable(transaction_, mode, id);
+        if (release) { release_tables_.push_back(id); }
+    }
+
+private:
+    LockManager* locks_;
+    Transaction& transaction_;
+    std::vector<table_id_t> release_tables_;
+};
+
+void AcquireExecutionLocks(const PlanNode& plan, StatementLockGuard& locks,
                            Catalog& catalog) {
-    auto* locks = context.GetLockManager();
-    if (locks == nullptr) { return; }
-    auto& transaction = context.GetTransaction();
-    const auto lock_table = [&](table_id_t id, LockMode mode) {
-        locks->LockTable(transaction, mode, id);
-    };
+    const auto lock_table = [&](table_id_t id, LockMode mode) { locks.LockTable(id, mode); };
     switch (plan.GetType()) {
         case PlanType::Insert:
             lock_table(dynamic_cast<const InsertPlan&>(plan).GetTableId(), LockMode::Exclusive);
@@ -598,7 +621,8 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
 ExecutionResult Executor::Execute(const PlanNode& plan, ExecutionContext& context) {
     auto& transaction = context.GetTransaction();
     if (!transaction.IsActive()) { throw std::logic_error("Execution transaction is not active"); }
-    AcquireExecutionLocks(plan, context, catalog_);
+    StatementLockGuard statement_locks(context);
+    AcquireExecutionLocks(plan, statement_locks, catalog_);
     auto& pool = catalog_.GetBufferPoolManager();
     const bool writes_pages = WritesPages(plan.GetType());
     if (writes_pages) { pool.SetActiveTransaction(&transaction); }

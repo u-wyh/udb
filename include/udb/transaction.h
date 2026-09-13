@@ -20,6 +20,7 @@ class LockManager;
 using transaction_id_t = std::uint64_t;
 
 enum class TransactionState { Active, Committed, Aborted };
+enum class IsolationLevel { ReadCommitted, RepeatableRead };
 
 struct RowLockId {
     table_id_t table_id;
@@ -37,6 +38,7 @@ public:
     TransactionState GetState() const { return state_; }
     bool IsActive() const { return state_ == TransactionState::Active; }
     bool IsAbortRequested() const { return abort_requested_.load(); }
+    IsolationLevel GetIsolationLevel() const { return isolation_level_; }
     const std::set<table_id_t>& GetSharedTableLocks() const { return shared_table_locks_; }
     const std::set<table_id_t>& GetExclusiveTableLocks() const { return exclusive_table_locks_; }
     const std::set<RowLockId>& GetSharedRowLocks() const { return shared_row_locks_; }
@@ -46,8 +48,10 @@ private:
     friend class TransactionManager;
     friend class BufferPoolManager;
     friend class LockManager;
-    explicit Transaction(transaction_id_t id) : id_(id) {}
+    Transaction(transaction_id_t id, IsolationLevel isolation_level)
+        : id_(id), isolation_level_(isolation_level) {}
     transaction_id_t id_;
+    IsolationLevel isolation_level_;
     TransactionState state_ = TransactionState::Active;
     std::atomic<bool> abort_requested_{false};
     std::map<page_id_t, Page> before_images_;
@@ -65,7 +69,7 @@ public:
                                 LogManager* log_manager = nullptr,
                                 LockManager* lock_manager = nullptr)
         : pool_(pool), log_manager_(log_manager), lock_manager_(lock_manager) {}
-    Transaction& Begin();
+    Transaction& Begin(IsolationLevel isolation_level = IsolationLevel::RepeatableRead);
     void Commit(Transaction& transaction);
     void Abort(Transaction& transaction, const std::function<void()>& before_unlock = {});
     Transaction& GetTransaction(transaction_id_t id);
