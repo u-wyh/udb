@@ -89,7 +89,12 @@ void TestValidation(const std::filesystem::path& valid,
     const auto truncated = directory / "truncated.wal";
     std::filesystem::copy_file(valid, truncated);
     std::filesystem::resize_file(truncated, std::filesystem::file_size(truncated) - 1);
-    Reject([&] { LogManager log(truncated); });
+    {
+        LogManager log(truncated);
+        Check(log.GetRecords().size() == 6 &&
+              std::filesystem::file_size(truncated) < std::filesystem::file_size(valid),
+              "Truncated WAL tail was not discarded at its last valid record");
+    }
     Reject([&] { LogManager log(directory / "wrong.log"); });
 }
 
@@ -108,8 +113,7 @@ void TestDatabaseWal(const std::filesystem::path& path) {
     {
         auto database = Database::Open(path, 1);
         const auto& records = database->GetLogManager().GetRecords();
-        Check(records.size() == 1 && records[0].GetTransactionId() == 42,
-              "Database did not reopen its WAL");
+        Check(records.empty(), "Clean Database::Close did not reset its WAL");
         database->Close();
     }
 }

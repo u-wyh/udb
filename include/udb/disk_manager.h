@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <set>
 #include <vector>
 
@@ -39,6 +40,10 @@ public:
     const std::set<page_id_t>& GetFreePageIds() const { return free_pages_; }
     // Used only while opening database metadata. Validation is atomic.
     void RestoreFreePageIds(const std::vector<page_id_t>& page_ids);
+    // Recovery bypasses the allocation map while replaying physical WAL, then
+    // applies the resulting allocation/free state over metadata's checkpoint.
+    void RecoveryWritePage(page_id_t page_id, const Page& page);
+    void ApplyRecoveryPageStates(const std::map<page_id_t, bool>& allocated);
 
 private:
     std::streamoff Offset(page_id_t page_id) const;

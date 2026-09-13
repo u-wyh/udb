@@ -125,21 +125,21 @@ std::vector<unsigned char> ReadFile(const std::filesystem::path& path) {
     return bytes;
 }
 
-std::vector<LogRecord> Decode(const std::vector<unsigned char>& file) {
+std::vector<LogRecord> Decode(const std::vector<unsigned char>& file,
+                              std::size_t* valid_size) {
     std::vector<LogRecord> records;
     std::size_t position = 0;
     lsn_t expected_lsn = 0;
     while (position < file.size()) {
-        if (file.size() - position < kHeaderSize) { throw std::runtime_error("Truncated WAL record"); }
+        if (file.size() - position < kHeaderSize) { break; }
         if (Read(file, position, 8) != kMagic || Read(file, position + 8, 4) != kVersion) {
             throw std::runtime_error("Invalid WAL record header");
         }
         const auto size = Read(file, position + 12, 4);
         const auto type = DecodeType(Read(file, position + 20, 1));
         const auto expected_size = kHeaderSize + PayloadSize(type);
-        if (size != expected_size || size > file.size() - position) {
-            throw std::runtime_error("Invalid or truncated WAL record size");
-        }
+        if (size != expected_size) { throw std::runtime_error("Invalid WAL record size"); }
+        if (size > file.size() - position) { break; }
         std::vector<unsigned char> encoded(file.begin() + static_cast<std::ptrdiff_t>(position),
                                            file.begin() + static_cast<std::ptrdiff_t>(position + size));
         const auto stored_checksum = Read(encoded, 16, 4);
@@ -180,6 +180,7 @@ std::vector<LogRecord> Decode(const std::vector<unsigned char>& file) {
         records.push_back(std::move(record));
         position += static_cast<std::size_t>(size);
     }
+    *valid_size = position;
     return records;
 }
 
@@ -250,7 +251,10 @@ LogManager::LogManager(const std::filesystem::path& path) : path_(path) {
     if (!std::filesystem::is_regular_file(path)) {
         throw std::runtime_error("WAL path must be a regular file");
     }
-    records_ = Decode(ReadFile(path));
+    const auto file = ReadFile(path);
+    std::size_t valid_size = 0;
+    records_ = Decode(file, &valid_size);
+    if (valid_size != file.size()) { std::filesystem::resize_file(path, valid_size); }
     next_lsn_ = static_cast<lsn_t>(records_.size());
     if (!records_.empty()) { persistent_lsn_ = records_.back().GetLsn(); }
     output_.open(path, std::ios::binary | std::ios::app);
@@ -288,6 +292,19 @@ void LogManager::Flush() {
                                  std::to_string(sync_result != 0 ? sync_error : errno));
     }
     if (!records_.empty()) { persistent_lsn_ = records_.back().GetLsn(); }
+}
+
+void LogManager::Reset() {
+    Flush();
+    output_.close();
+    if (!output_) { throw std::runtime_error("Cannot close WAL for reset"); }
+    std::filesystem::resize_file(path_, 0);
+    output_.open(path_, std::ios::binary | std::ios::app);
+    if (!output_) { throw std::runtime_error("Cannot reopen reset WAL"); }
+    records_.clear();
+    next_lsn_ = 0;
+    persistent_lsn_.reset();
+    Flush();
 }
 
 }  // namespace udb

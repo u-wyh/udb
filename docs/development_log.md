@@ -424,3 +424,11 @@
 - 测试结果：全新构建无警告，51 / 51 测试及 ASan / UBSan 通过，覆盖 before/after image、淘汰/显式刷页顺序、allocate/free、COMMIT/ABORT 与重开，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 52：Crash Recovery。
+
+## 阶段 52：Crash Recovery
+
+- 做了什么：启动时扫描 WAL，对已提交事务 REDO，并对中止及未完成事务反向 UNDO，同时恢复页面分配状态。
+- 关键设计：恢复使用整页 before/after image；截断尾日志安全丢弃；恢复可重复执行，干净关闭后回收 WAL。
+- 测试结果：全新构建无警告，52 / 52 测试及 ASan / UBSan 通过，覆盖提交重做、loser 回滚、allocate/free、截断日志与重复恢复，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 53：Checkpoint。

@@ -3,6 +3,8 @@
 #include "udb/catalog.h"
 #include "udb/log_manager.h"
 
+#include <map>
+
 namespace udb {
 
 // Single owner per database; no concurrent opens/writers. Path must end in .udb;
@@ -37,6 +39,7 @@ private:
     std::unique_ptr<DiskManager> disk_;
     std::unique_ptr<BufferPoolManager> pool_;
     std::unique_ptr<Catalog> catalog_;
+    std::map<page_id_t, bool> recovery_page_states_;
 };
 
 }  // namespace udb

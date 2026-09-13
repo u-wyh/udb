@@ -1,4 +1,5 @@
 #include "udb/database.h"
+#include "udb/recovery_manager.h"
 
 #include <fstream>
 #include <limits>
@@ -149,6 +150,8 @@ std::unique_ptr<Database> Database::Open(const std::filesystem::path& path, std:
         throw std::runtime_error("Database data or metadata file is missing");
     }
     auto database = std::unique_ptr<Database>(new Database(path, capacity));
+    database->recovery_page_states_ = RecoveryManager::Recover(
+        *database->disk_, *database->log_manager_);
     database->LoadMetadata();
     return database;
 }
@@ -172,6 +175,7 @@ void Database::Flush() {
 void Database::Close() {
     if (!catalog_) { return; }
     Flush();
+    log_manager_->Reset();
     catalog_.reset();
     pool_.reset();
     disk_.reset();
@@ -259,6 +263,8 @@ void Database::LoadMetadata() {
         }
     }
     disk_->RestoreFreePageIds(free_pages);
+    disk_->ApplyRecoveryPageStates(recovery_page_states_);
+    recovery_page_states_.clear();
     if (count > reader.Remaining() / 24) { throw std::runtime_error("Invalid metadata table count"); }
     for (std::uint64_t i = 0; i < count; ++i) {
         const auto id = reader.Read(8);

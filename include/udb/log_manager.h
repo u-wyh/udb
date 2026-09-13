@@ -68,6 +68,8 @@ public:
 
     lsn_t Append(LogRecord record);
     void Flush();
+    // Used after a clean database shutdown has safely persisted data/metadata.
+    void Reset();
     const std::vector<LogRecord>& GetRecords() const { return records_; }
     lsn_t GetNextLsn() const { return next_lsn_; }
     std::optional<lsn_t> GetPersistentLsn() const { return persistent_lsn_; }

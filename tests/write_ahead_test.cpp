@@ -132,12 +132,13 @@ void TestSqlWal(const std::filesystem::path& path) {
         Check(sql.ExecuteSQL("SELECT id FROM t ORDER BY id").rows.size() == 2,
               "WAL integration changed rollback semantics");
         record_count = log.GetRecords().size();
+        Check(record_count > 0, "Integrated WAL unexpectedly stayed empty");
         database->Close();
     }
     {
         auto database = Database::Open(path, 1);
-        Check(database->GetLogManager().GetRecords().size() >= record_count,
-              "Database did not preserve integrated WAL records");
+        Check(database->GetLogManager().GetRecords().empty(),
+              "Clean close did not recycle integrated WAL records");
         SqlEngine sql(database->GetCatalog());
         const auto rows = sql.ExecuteSQL("SELECT id FROM t ORDER BY id").rows;
         Check(rows.size() == 2 && rows[0].GetValue(0) == Value::Integer(1) &&

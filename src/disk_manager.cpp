@@ -116,4 +116,28 @@ void DiskManager::RestoreFreePageIds(const std::vector<page_id_t>& page_ids) {
     free_pages_ = std::move(restored);
 }
 
+void DiskManager::RecoveryWritePage(page_id_t page_id, const Page& page) {
+    if (page_id < 0 || page_id >= kMaxPages) {
+        throw std::out_of_range("Recovery page ID is outside the database file");
+    }
+    while (page_count_ <= page_id) {
+        WriteAt(page_count_, Page{});
+        ++page_count_;
+    }
+    WriteAt(page_id, page);
+}
+
+void DiskManager::ApplyRecoveryPageStates(const std::map<page_id_t, bool>& allocated) {
+    for (const auto& [page_id, is_allocated] : allocated) {
+        if (page_id < 0 || page_id >= page_count_) {
+            throw std::runtime_error("Recovery allocation state is out of range");
+        }
+        if (is_allocated) {
+            free_pages_.erase(page_id);
+        } else {
+            free_pages_.insert(page_id);
+        }
+    }
+}
+
 }  // namespace udb
