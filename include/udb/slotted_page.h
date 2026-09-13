@@ -2,6 +2,7 @@
 
 #include "udb/record.h"
 #include "udb/rid.h"
+#include "udb/tuple_meta.h"
 
 #include <optional>
 
@@ -13,15 +14,17 @@ namespace udb {
 class SlottedPage {
 public:
     static constexpr std::size_t HEADER_SIZE = 16;
-    static constexpr std::size_t SLOT_SIZE = 6;
+    static constexpr std::size_t SLOT_SIZE = 16;
 
     SlottedPage(Page& page, page_id_t page_id);
     SlottedPage(const Page& page, page_id_t page_id);
     void Init();
     // nullopt means insufficient space, with no page mutation. Slot IDs are
     // never reused, so a deleted RID cannot alias a later record.
-    std::optional<RID> InsertRecord(const Record& record);
+    std::optional<RID> InsertRecord(const Record& record, TupleMeta meta = {});
     Record GetRecord(RID rid) const;
+    TupleMeta GetTupleMeta(RID rid) const;
+    void SetTupleMeta(RID rid, TupleMeta meta);
     // Returns false only when the replacement cannot fit. The page remains
     // byte-for-byte unchanged on failure; successful updates preserve all RIDs.
     bool UpdateRecord(RID rid, const Record& record);
@@ -38,6 +41,8 @@ private:
     // Every operation validates serialized bounds/layout before accessing records.
     // Invalid/deleted RIDs throw out_of_range; corrupt layouts throw runtime_error.
     void Validate() const;
+    std::size_t SerializedSlotSize() const;
+    bool UpgradeLegacyFormat();
     std::size_t FindSlot(RID rid) const;
     Page& MutablePage();
 

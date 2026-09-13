@@ -512,3 +512,11 @@
 - 测试结果：全新构建无警告，62 / 62 测试及 ASan / UBSan 通过，并发时间戳场景连续重复 100 次通过，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 63：TupleMeta。
+
+## 阶段 63：TupleMeta
+
+- 做了什么：为每个物理 RID 增加独立持久化 TupleMeta，保存 timestamp 与 is_deleted，Record/Tuple 逻辑序列化保持不变。
+- 关键设计：SlottedPage v2 将元数据编码在 Slot 中；v1 页面保持可读并提供默认元数据，空间允许时原页升级且 RID 稳定；元数据写入沿用 Page Guard 与 WAL 写入口。
+- 测试结果：全新构建无警告，63 / 63 测试及 ASan / UBSan 通过，覆盖二进制 Record 隔离、重开持久化、v1 兼容升级和失败原子性，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 64：Undo Version Chain。

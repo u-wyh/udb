@@ -20,8 +20,10 @@ public:
     // Oversized records throw length_error before allocating/modifying pages.
     // Buffer/I/O errors propagate. Failed append can leave an unlinked allocated
     // page; no page reclamation or transactional rollback is provided.
-    RID InsertRecord(const Record& record);
+    RID InsertRecord(const Record& record, TupleMeta meta = {});
     Record GetRecord(RID rid) const;
+    TupleMeta GetTupleMeta(RID rid) const;
+    void SetTupleMeta(RID rid, TupleMeta meta);
     // No cross-page relocation: false means the replacement cannot fit in the
     // RID's current page, with the original record unchanged.
     bool UpdateRecord(RID rid, const Record& record);

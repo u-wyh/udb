@@ -74,7 +74,9 @@ void TestLayout() {
     Check(Equal(view.GetRecord(a), binary) && Equal(view.GetRecord(c), Bytes(11, 'c')),
           "Compaction changed surviving RIDs");
     const auto d = view.InsertRecord(Bytes(87, 'd')).value();
-    Check(d.slot_id == 3 && view.GetFreeSpace() == free_before, "Reclaimed space not reused");
+    Check(d.slot_id == 3 &&
+              view.GetFreeSpace() == free_before + 93 - 87 - udb::SlottedPage::SLOT_SIZE,
+          "Reclaimed space not reused");
     ExpectThrow<std::out_of_range>([&] { view.GetRecord(b); });
     ExpectThrow<std::out_of_range>([&] { view.DeleteRecord(b); });
     for (const auto rid : {udb::RID{-1, 0}, udb::RID{8, 0},

@@ -47,7 +47,7 @@ void TableHeap::RequireMember(page_id_t page_id) const {
     throw std::out_of_range("RID page is not in this table");
 }
 
-RID TableHeap::InsertRecord(const Record& record) {
+RID TableHeap::InsertRecord(const Record& record, TupleMeta meta) {
     const std::unique_lock<std::shared_mutex> lock(mutex_);
     if (record.Size() > PAGE_SIZE - SlottedPage::HEADER_SIZE - SlottedPage::SLOT_SIZE) {
         throw std::length_error("Record cannot fit in an empty table page");
@@ -56,7 +56,7 @@ RID TableHeap::InsertRecord(const Record& record) {
     for (const auto id : ids) {
         auto page = pool_.WritePage(id);
         SlottedPage view(page.GetPage(), id);
-        if (const auto rid = view.InsertRecord(record)) {
+        if (const auto rid = view.InsertRecord(record, meta)) {
             return *rid;
         }
     }
@@ -66,7 +66,7 @@ RID TableHeap::InsertRecord(const Record& record) {
         auto page = pool_.NewPageGuard();
         SlottedPage view(page.GetPage(), page.GetPageId());
         view.Init();
-        inserted = view.InsertRecord(record).value();
+        inserted = view.InsertRecord(record, meta).value();
     }
     // Release the new page before refetching the tail: capacity one is enough.
     // Publish the link only after the new page has been initialized successfully.
@@ -86,6 +86,20 @@ Record TableHeap::GetRecord(RID rid) const {
     RequireMember(rid.page_id);
     auto page = pool_.ReadPage(rid.page_id);
     return SlottedPage(page.GetPage(), rid.page_id).GetRecord(rid);
+}
+
+TupleMeta TableHeap::GetTupleMeta(RID rid) const {
+    const std::shared_lock<std::shared_mutex> lock(mutex_);
+    RequireMember(rid.page_id);
+    auto page = pool_.ReadPage(rid.page_id);
+    return SlottedPage(page.GetPage(), rid.page_id).GetTupleMeta(rid);
+}
+
+void TableHeap::SetTupleMeta(RID rid, TupleMeta meta) {
+    const std::unique_lock<std::shared_mutex> lock(mutex_);
+    RequireMember(rid.page_id);
+    auto page = pool_.WritePage(rid.page_id);
+    SlottedPage(page.GetPage(), rid.page_id).SetTupleMeta(rid, meta);
 }
 
 bool TableHeap::UpdateRecord(RID rid, const Record& record) {
