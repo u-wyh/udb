@@ -65,6 +65,9 @@ public:
     Index& GetIndex(const std::string& name);
     std::vector<index_id_t> ListIndexes() const;
     std::vector<index_id_t> GetTableIndexes(table_id_t table_id) const;
+    // Reclaims MVCC history older than the global watermark and physically
+    // removes committed tombstones. Returns the number of removed tuples.
+    std::size_t Vacuum();
 
 private:
     friend class Database;

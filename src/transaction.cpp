@@ -244,6 +244,39 @@ std::vector<std::pair<IndexKey, RID>> TransactionManager::GetStaleIndexEntries(
     return result;
 }
 
+bool TransactionManager::VacuumVersion(RID rid, TupleMeta current_meta,
+                                       timestamp_t watermark) {
+    if (IsTransactionTimestamp(current_meta.timestamp)) { return false; }
+    const std::lock_guard<std::mutex> lock(undo_mutex_);
+    const std::lock_guard<std::mutex> transactions_lock(transactions_mutex_);
+    const auto head = version_links_.find(rid);
+    if (current_meta.timestamp <= watermark) {
+        if (head != version_links_.end()) { version_links_.erase(head); }
+        for (auto entry = stale_index_entries_.begin(); entry != stale_index_entries_.end();) {
+            if (entry->rid == rid) { entry = stale_index_entries_.erase(entry); }
+            else { ++entry; }
+        }
+        return current_meta.is_deleted;
+    }
+    if (head == version_links_.end()) { return false; }
+    auto link = head->second;
+    std::set<VersionLink> visited;
+    while (visited.insert(link).second) {
+        const auto owner = transactions_.find(link.transaction_id);
+        if (owner == transactions_.end() || link.undo_index >= owner->second->undo_records_.size()) {
+            throw std::runtime_error("Vacuum found a dangling undo link");
+        }
+        auto& undo = owner->second->undo_records_[link.undo_index];
+        if (!IsTransactionTimestamp(undo.meta.timestamp) && undo.meta.timestamp <= watermark) {
+            undo.previous.reset();
+            break;
+        }
+        if (!undo.previous) { break; }
+        link = *undo.previous;
+    }
+    return false;
+}
+
 std::optional<VersionLink> TransactionManager::GetVersionLink(RID rid) const {
     const std::lock_guard<std::mutex> lock(undo_mutex_);
     const auto found = version_links_.find(rid);

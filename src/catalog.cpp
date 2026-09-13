@@ -121,6 +121,27 @@ void Catalog::DropIndex(index_id_t id) {
     indexes_.erase(found);
 }
 
+std::size_t Catalog::Vacuum() {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
+    const auto watermark = TransactionManager::GetWatermark();
+    std::size_t removed = 0;
+    for (auto& [table_id, entry] : tables_) {
+        static_cast<void>(table_id);
+        std::vector<RID> rids;
+        for (auto rid = entry->heap.GetFirstRID(); rid; rid = entry->heap.GetNextRID(*rid)) {
+            rids.push_back(*rid);
+        }
+        for (const auto rid : rids) {
+            const auto meta = entry->heap.GetTupleMeta(rid);
+            if (transaction_manager_.VacuumVersion(rid, meta, watermark)) {
+                entry->heap.DeleteRecord(rid);
+                ++removed;
+            }
+        }
+    }
+    return removed;
+}
+
 void Catalog::DropIndex(const std::string& name) {
     const std::lock_guard<std::recursive_mutex> lock(mutex_);
     DropIndex(GetIndex(name).GetMetadata().GetIndexId());

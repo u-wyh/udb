@@ -576,3 +576,11 @@
 - 测试结果：全新构建无警告，70 / 70 测试及 ASan / UBSan 通过，覆盖精确/范围、unique/non-unique、VARCHAR、自身写、未来版本和 tombstone，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 71：Vacuum + Watermark。
+
+## 阶段 71：Vacuum + Watermark
+
+- 做了什么：新增 Catalog Vacuum，按 oldest active snapshot watermark 裁剪版本链、清理 stale index entry，并物理回收安全的逻辑 tombstone。
+- 关键设计：watermark 之前仍可能被读取的锚点版本保留；当前版本已不晚于 watermark 时整条历史可释放；SlottedPage 保留失效 slot，后续插入不会复用 RID。
+- 测试结果：全新构建无警告，71 / 71 测试及 ASan / UBSan 通过，覆盖活跃 snapshot 保护、watermark 推进、物理回收、索引清理和 RID 不复用，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 72：MVCC WAL / Recovery。

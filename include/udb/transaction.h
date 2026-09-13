@@ -152,6 +152,7 @@ public:
                                  const IndexKey& key, RID rid);
     std::vector<std::pair<IndexKey, RID>> GetStaleIndexEntries(
         std::uint64_t index_id) const;
+    bool VacuumVersion(RID rid, TupleMeta current_meta, timestamp_t watermark);
     std::optional<VersionLink> GetVersionLink(RID rid) const;
     UndoRecord GetUndoRecord(VersionLink link) const;
     std::optional<RecordVersion> ReconstructVersion(RID rid, const Record& current,
