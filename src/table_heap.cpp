@@ -21,6 +21,11 @@ TableHeap::TableHeap(BufferPoolManager& pool, page_id_t first_page_id)
     CollectPageIds();
 }
 
+page_id_t TableHeap::GetFirstPageId() const {
+    const std::shared_lock<std::shared_mutex> lock(mutex_);
+    return first_page_id_;
+}
+
 std::vector<page_id_t> TableHeap::CollectPageIds() const {
     std::vector<page_id_t> ids;
     std::unordered_set<page_id_t> seen;
@@ -43,6 +48,7 @@ void TableHeap::RequireMember(page_id_t page_id) const {
 }
 
 RID TableHeap::InsertRecord(const Record& record) {
+    const std::unique_lock<std::shared_mutex> lock(mutex_);
     if (record.Size() > PAGE_SIZE - SlottedPage::HEADER_SIZE - SlottedPage::SLOT_SIZE) {
         throw std::length_error("Record cannot fit in an empty table page");
     }
@@ -76,24 +82,28 @@ RID TableHeap::InsertRecord(const Record& record) {
 }
 
 Record TableHeap::GetRecord(RID rid) const {
+    const std::shared_lock<std::shared_mutex> lock(mutex_);
     RequireMember(rid.page_id);
     auto page = pool_.ReadPage(rid.page_id);
     return SlottedPage(page.GetPage(), rid.page_id).GetRecord(rid);
 }
 
 bool TableHeap::UpdateRecord(RID rid, const Record& record) {
+    const std::unique_lock<std::shared_mutex> lock(mutex_);
     RequireMember(rid.page_id);
     auto page = pool_.WritePage(rid.page_id);
     return SlottedPage(page.GetPage(), rid.page_id).UpdateRecord(rid, record);
 }
 
 void TableHeap::DeleteRecord(RID rid) {
+    const std::unique_lock<std::shared_mutex> lock(mutex_);
     RequireMember(rid.page_id);
     auto page = pool_.WritePage(rid.page_id);
     SlottedPage(page.GetPage(), rid.page_id).DeleteRecord(rid);
 }
 
 std::optional<RID> TableHeap::GetFirstRID() const {
+    const std::shared_lock<std::shared_mutex> lock(mutex_);
     for (const auto id : CollectPageIds()) {
         auto page = pool_.ReadPage(id);
         SlottedPage view(page.GetPage(), id);
@@ -105,6 +115,7 @@ std::optional<RID> TableHeap::GetFirstRID() const {
 }
 
 std::optional<RID> TableHeap::GetNextRID(RID current) const {
+    const std::shared_lock<std::shared_mutex> lock(mutex_);
     const auto ids = CollectPageIds();
     const auto current_page = std::find(ids.begin(), ids.end(), current.page_id);
     if (current_page == ids.end()) {
@@ -125,6 +136,7 @@ std::optional<RID> TableHeap::GetNextRID(RID current) const {
 }
 
 void TableHeap::DeletePages() {
+    const std::unique_lock<std::shared_mutex> lock(mutex_);
     const auto ids = CollectPageIds();
     for (const auto id : ids) {
         if (!pool_.CanDeletePage(id)) {

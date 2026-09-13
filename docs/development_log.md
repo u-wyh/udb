@@ -448,3 +448,11 @@
 - 测试结果：全新构建无警告，54 / 54 测试及 ASan / UBSan 通过，并发分配、读写、pin/fetch/flush 压力测试通过，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 55：Concurrent Table/Index。
+
+## 阶段 55：Concurrent Table/Index
+
+- 做了什么：为 TableHeap、B+ Tree 和 Catalog 增加模块级并发保护，保证页面链、树结构及元数据发布的一致性。
+- 关键设计：TableHeap 与 B+ Tree 使用共享/独占锁区分读取和结构修改；Catalog 使用粗粒度递归 mutex 保持现有嵌套接口；锁顺序保持在 Page Guard 之上。
+- 测试结果：全新构建无警告，55 / 55 测试及 ASan / UBSan 通过，并发跨页插入、索引分裂/删除/查询和 Catalog 发布压力测试通过，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 56：Lock Manager。

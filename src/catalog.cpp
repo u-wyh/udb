@@ -22,6 +22,7 @@ bool ValueLess(const Value& left, const Value& right) {
 }  // namespace
 
 void Catalog::RestoreTable(const TableMetadata& metadata) {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (tables_.count(metadata.GetTableId()) != 0) {
         throw std::runtime_error("Duplicate metadata table ID");
     }
@@ -36,6 +37,7 @@ void Catalog::RestoreTable(const TableMetadata& metadata) {
 }
 
 void Catalog::RestoreNextId(table_id_t next_id) {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!tables_.empty() && next_id <= tables_.rbegin()->first) {
         throw std::runtime_error("Invalid metadata next table ID");
     }
@@ -43,6 +45,7 @@ void Catalog::RestoreNextId(table_id_t next_id) {
 }
 
 void Catalog::RestoreIndex(const IndexMetadata& metadata) {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (indexes_.count(metadata.GetIndexId()) != 0) {
         throw std::runtime_error("Duplicate metadata index ID");
     }
@@ -68,6 +71,7 @@ void Catalog::RestoreIndex(const IndexMetadata& metadata) {
 }
 
 void Catalog::RestoreNextIndexId(index_id_t next_id) {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!indexes_.empty() && next_id <= indexes_.rbegin()->first) {
         throw std::runtime_error("Invalid metadata next index ID");
     }
@@ -75,6 +79,7 @@ void Catalog::RestoreNextIndexId(index_id_t next_id) {
 }
 
 const TableMetadata& Catalog::CreateTable(const std::string& name, const Schema& schema) {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (name.empty()) {
         throw std::invalid_argument("Table name must not be empty");
     }
@@ -93,6 +98,7 @@ const TableMetadata& Catalog::CreateTable(const std::string& name, const Schema&
 }
 
 void Catalog::DropTable(table_id_t id) {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     const auto found = tables_.find(id);
     if (found == tables_.end()) { throw std::out_of_range("Table ID not found"); }
     found->second->heap.DeletePages();
@@ -108,6 +114,7 @@ void Catalog::DropTable(table_id_t id) {
 }
 
 void Catalog::DropIndex(index_id_t id) {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     const auto found = indexes_.find(id);
     if (found == indexes_.end()) { throw std::out_of_range("Index ID not found"); }
     found->second->GetTree().DeletePages();
@@ -115,12 +122,17 @@ void Catalog::DropIndex(index_id_t id) {
 }
 
 void Catalog::DropIndex(const std::string& name) {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     DropIndex(GetIndex(name).GetMetadata().GetIndexId());
 }
 
-const TableMetadata& Catalog::GetTable(table_id_t id) const { return tables_.at(id)->metadata; }
+const TableMetadata& Catalog::GetTable(table_id_t id) const {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return tables_.at(id)->metadata;
+}
 
 const TableMetadata& Catalog::GetTable(const std::string& name) const {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     for (const auto& item : tables_) {
         if (item.second->metadata.GetTableName() == name) {
             return item.second->metadata;
@@ -129,12 +141,25 @@ const TableMetadata& Catalog::GetTable(const std::string& name) const {
     throw std::out_of_range("Table name not found");
 }
 
-TableHeap& Catalog::GetTableHeap(table_id_t id) { return tables_.at(id)->heap; }
-TableHeap& Catalog::GetTableHeap(const std::string& name) { return GetTableHeap(GetTable(name).GetTableId()); }
-const TableHeap& Catalog::GetTableHeap(table_id_t id) const { return tables_.at(id)->heap; }
-const TableHeap& Catalog::GetTableHeap(const std::string& name) const { return GetTableHeap(GetTable(name).GetTableId()); }
+TableHeap& Catalog::GetTableHeap(table_id_t id) {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return tables_.at(id)->heap;
+}
+TableHeap& Catalog::GetTableHeap(const std::string& name) {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return GetTableHeap(GetTable(name).GetTableId());
+}
+const TableHeap& Catalog::GetTableHeap(table_id_t id) const {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return tables_.at(id)->heap;
+}
+const TableHeap& Catalog::GetTableHeap(const std::string& name) const {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return GetTableHeap(GetTable(name).GetTableId());
+}
 
 std::vector<table_id_t> Catalog::ListTables() const {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     std::vector<table_id_t> ids;
     ids.reserve(tables_.size());
     for (const auto& item : tables_) {
@@ -144,6 +169,7 @@ std::vector<table_id_t> Catalog::ListTables() const {
 }
 
 const TableStatistics& Catalog::AnalyzeTable(table_id_t id) {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     auto& entry = *tables_.at(id);
     const auto& schema = entry.metadata.GetSchema();
     TableStatistics statistics;
@@ -177,30 +203,36 @@ const TableStatistics& Catalog::AnalyzeTable(table_id_t id) {
 }
 
 const TableStatistics& Catalog::AnalyzeTable(const std::string& name) {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     return AnalyzeTable(GetTable(name).GetTableId());
 }
 
 bool Catalog::HasTableStatistics(table_id_t id) const {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     return tables_.at(id)->statistics.has_value();
 }
 
 const TableStatistics& Catalog::GetTableStatistics(table_id_t id) const {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     const auto& statistics = tables_.at(id)->statistics;
     if (!statistics) { throw std::logic_error("Table has not been analyzed"); }
     return *statistics;
 }
 
 const TableStatistics& Catalog::GetTableStatistics(const std::string& name) const {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     return GetTableStatistics(GetTable(name).GetTableId());
 }
 
 const Index& Catalog::CreateIndex(const std::string& name, table_id_t table_id,
                                   std::size_t column_index, BPlusTreeOptions options) {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     return CreateIndex(name, table_id, std::vector<std::size_t>{column_index}, options);
 }
 
 const Index& Catalog::CreateIndex(const std::string& name, table_id_t table_id,
                                   const std::vector<std::size_t>& columns, BPlusTreeOptions options) {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (name.empty()) { throw std::invalid_argument("Index name must not be empty"); }
     const auto table = tables_.find(table_id);
     if (table == tables_.end()) { throw std::out_of_range("Index table ID not found"); }
@@ -240,17 +272,25 @@ const Index& Catalog::CreateIndex(const std::string& name, table_id_t table_id,
     return *inserted.first->second;
 }
 
-const Index& Catalog::GetIndex(index_id_t id) const { return *indexes_.at(id); }
+const Index& Catalog::GetIndex(index_id_t id) const {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return *indexes_.at(id);
+}
 
 const Index& Catalog::GetIndex(const std::string& name) const {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     for (const auto& item : indexes_) {
         if (item.second->GetMetadata().GetIndexName() == name) { return *item.second; }
     }
     throw std::out_of_range("Index name not found");
 }
 
-Index& Catalog::GetIndex(index_id_t id) { return *indexes_.at(id); }
+Index& Catalog::GetIndex(index_id_t id) {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return *indexes_.at(id);
+}
 Index& Catalog::GetIndex(const std::string& name) {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     for (auto& item : indexes_) {
         if (item.second->GetMetadata().GetIndexName() == name) { return *item.second; }
     }
@@ -258,6 +298,7 @@ Index& Catalog::GetIndex(const std::string& name) {
 }
 
 std::vector<index_id_t> Catalog::ListIndexes() const {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     std::vector<index_id_t> ids;
     ids.reserve(indexes_.size());
     for (const auto& item : indexes_) { ids.push_back(item.first); }
@@ -265,6 +306,7 @@ std::vector<index_id_t> Catalog::ListIndexes() const {
 }
 
 std::vector<index_id_t> Catalog::GetTableIndexes(table_id_t table_id) const {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (tables_.count(table_id) == 0) { throw std::out_of_range("Table ID not found"); }
     std::vector<index_id_t> ids;
     for (const auto& item : indexes_) {

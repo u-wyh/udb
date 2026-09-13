@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <fstream>
 #include <limits>
+#include <mutex>
 #include <unistd.h>
 
 namespace udb {
@@ -210,6 +211,7 @@ void Database::Close() {
 }
 
 void Database::SaveMetadata() const {
+    const std::lock_guard<std::recursive_mutex> catalog_lock(catalog_->mutex_);
     const auto ids = catalog_->ListTables();
     if (ids.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::length_error("Too many metadata tables");

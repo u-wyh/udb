@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <functional>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <set>
 #include <unordered_set>
@@ -86,8 +87,19 @@ BPlusTree::BPlusTree(BufferPoolManager& pool, page_id_t root_page_id,
 }
 
 void BPlusTree::ReloadRootFromHeader() {
+    const std::unique_lock<std::shared_mutex> lock(mutex_);
     if (header_page_id_ < 0) { throw std::logic_error("B+ tree has no header page"); }
     root_page_id_ = ReadHeader(pool_, header_page_id_);
+}
+
+page_id_t BPlusTree::GetRootPageId() const {
+    const std::shared_lock<std::shared_mutex> lock(mutex_);
+    return root_page_id_;
+}
+
+page_id_t BPlusTree::GetHeaderPageId() const {
+    const std::shared_lock<std::shared_mutex> lock(mutex_);
+    return header_page_id_;
 }
 
 std::unique_ptr<BPlusTree> BPlusTree::CreateWithHeader(
@@ -156,10 +168,18 @@ void BPlusTree::WriteKey(Page& page, std::size_t offset, const IndexKey& key) co
 std::vector<std::pair<std::int64_t, RID>> BPlusTree::ScanRange(
     std::optional<std::int64_t> lower, bool lower_inclusive,
     std::optional<std::int64_t> upper, bool upper_inclusive) const {
+    const std::shared_lock<std::shared_mutex> lock(mutex_);
     if (options_.string_max_length) { throw std::invalid_argument("Use ScanKeys for string indexes"); }
     std::vector<std::pair<std::int64_t, RID>> result;
-    for (const auto& entry : ScanKeys(lower, lower_inclusive, upper, upper_inclusive)) {
-        result.emplace_back(entry.first.GetInteger(), entry.second);
+    auto entries = ScanEntries(lower, lower_inclusive, upper, upper_inclusive);
+    for (const auto& entry : entries) {
+        if (options_.unique) {
+            result.emplace_back(entry.first.GetInteger(), entry.second);
+        } else {
+            for (const auto rid : ReadPostings(entry.second.page_id)) {
+                result.emplace_back(entry.first.GetInteger(), rid);
+            }
+        }
     }
     return result;
 }
@@ -399,19 +419,25 @@ page_id_t BPlusTree::WritePostings(const std::vector<RID>& values, std::vector<p
 }
 
 std::vector<RID> BPlusTree::GetValues(const IndexKey& key) const {
+    const std::shared_lock<std::shared_mutex> lock(mutex_);
     const auto value = FindValue(key);
     if (!value) { return {}; }
     return options_.unique ? std::vector<RID>{*value} : ReadPostings(value->page_id);
 }
 
 std::optional<RID> BPlusTree::GetValue(const IndexKey& key) const {
-    const auto values = GetValues(key);
+    const std::shared_lock<std::shared_mutex> lock(mutex_);
+    const auto value = FindValue(key);
+    if (!value) { return std::nullopt; }
+    if (options_.unique) { return value; }
+    const auto values = ReadPostings(value->page_id);
     return values.empty() ? std::nullopt : std::optional<RID>(values.front());
 }
 
 std::vector<std::pair<IndexKey, RID>> BPlusTree::ScanKeys(
     std::optional<IndexKey> lower, bool lower_inclusive,
     std::optional<IndexKey> upper, bool upper_inclusive) const {
+    const std::shared_lock<std::shared_mutex> lock(mutex_);
     if (lower) { ValidateKey(*lower); }
     if (upper) { ValidateKey(*upper); }
     auto entries = ScanEntries(lower, lower_inclusive, upper, upper_inclusive);
@@ -424,6 +450,7 @@ std::vector<std::pair<IndexKey, RID>> BPlusTree::ScanKeys(
 }
 
 bool BPlusTree::Insert(const IndexKey& key, RID rid) {
+    const std::unique_lock<std::shared_mutex> lock(mutex_);
     if (options_.unique) { return InsertKey(key, rid); }
     if (rid.page_id < 0) { throw std::invalid_argument("Invalid RID page ID"); }
     const auto head = FindValue(key);
@@ -436,6 +463,7 @@ bool BPlusTree::Insert(const IndexKey& key, RID rid) {
 }
 
 bool BPlusTree::Remove(const IndexKey& key) {
+    const std::unique_lock<std::shared_mutex> lock(mutex_);
     if (options_.unique) { return RemoveKey(key); }
     const auto head = FindValue(key);
     if (!head) { return false; }
@@ -447,6 +475,7 @@ bool BPlusTree::Remove(const IndexKey& key) {
 }
 
 bool BPlusTree::Remove(const IndexKey& key, RID rid) {
+    const std::unique_lock<std::shared_mutex> lock(mutex_);
     const auto head = FindValue(key);
     if (!head) { return false; }
     if (options_.unique) { return *head == rid && RemoveKey(key); }
@@ -455,7 +484,11 @@ bool BPlusTree::Remove(const IndexKey& key, RID rid) {
     const auto found = std::find(values.begin(), values.end(), rid);
     if (found == values.end()) { return false; }
     values.erase(found);
-    if (values.empty()) { return Remove(key); }
+    if (values.empty()) {
+        if (!RemoveKey(key)) { throw std::runtime_error("Missing posting key"); }
+        for (const auto page : pages) { DeleteNode(page); }
+        return true;
+    }
     WritePostings(values, std::move(pages));
     return true;
 }
@@ -568,7 +601,8 @@ std::vector<page_id_t> BPlusTree::CollectNodePageIds() const {
 }
 
 void BPlusTree::DeletePages() {
-    Validate();
+    const std::unique_lock<std::shared_mutex> lock(mutex_);
+    ValidateTree();
     auto page_ids = CollectNodePageIds();
     if (!options_.unique) {
         for (const auto& entry : ScanEntries(std::nullopt, true, std::nullopt, true)) {
@@ -814,6 +848,7 @@ void BPlusTree::InsertIntoParent(page_id_t left_page_id, IndexKey separator,
 }
 
 std::size_t BPlusTree::GetHeight() const {
+    const std::shared_lock<std::shared_mutex> lock(mutex_);
     std::unordered_set<page_id_t> seen;
     std::size_t height = 0;
     auto page_id = root_page_id_;
@@ -827,6 +862,11 @@ std::size_t BPlusTree::GetHeight() const {
 }
 
 void BPlusTree::Validate() const {
+    const std::shared_lock<std::shared_mutex> lock(mutex_);
+    ValidateTree();
+}
+
+void BPlusTree::ValidateTree() const {
     struct Info {
         IndexKey minimum = 0;
         IndexKey maximum = 0;

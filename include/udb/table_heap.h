@@ -3,18 +3,20 @@
 #include "udb/buffer_pool_manager.h"
 #include "udb/slotted_page.h"
 
+#include <mutex>
+#include <shared_mutex>
 #include <vector>
 
 namespace udb {
 
-// Single-threaded, non-owning BufferPoolManager reference. Caller saves the
-// first page ID and explicitly flushes the pool. No destructor I/O.
+// Thread-safe, non-owning BufferPoolManager reference. Caller saves the first
+// page ID and explicitly flushes the pool. No destructor I/O.
 class TableHeap {
 public:
     explicit TableHeap(BufferPoolManager& pool);  // Create an empty table.
     TableHeap(BufferPoolManager& pool, page_id_t first_page_id);  // Open/validate chain.
 
-    page_id_t GetFirstPageId() const { return first_page_id_; }
+    page_id_t GetFirstPageId() const;
     // Oversized records throw length_error before allocating/modifying pages.
     // Buffer/I/O errors propagate. Failed append can leave an unlinked allocated
     // page; no page reclamation or transactional rollback is provided.
@@ -37,6 +39,7 @@ private:
 
     BufferPoolManager& pool_;
     page_id_t first_page_id_;
+    mutable std::shared_mutex mutex_;
 };
 
 }  // namespace udb

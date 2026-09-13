@@ -7,10 +7,11 @@
 
 #include <map>
 #include <memory>
+#include <mutex>
 
 namespace udb {
 
-// Single-threaded, memory-only. Pool must outlive the catalog. Returned
+// Mutex-protected, memory-only. Pool must outlive the catalog. Returned
 // references stay valid until their table/index is removed or catalog destruction;
 // no implicit flush or reload.
 class Catalog {
@@ -84,6 +85,7 @@ private:
     // Name lookup is a simple linear scan for this first catalog.
     std::map<table_id_t, std::unique_ptr<Entry>> tables_;
     std::map<index_id_t, std::unique_ptr<Index>> indexes_;
+    mutable std::recursive_mutex mutex_;
 };
 
 }  // namespace udb

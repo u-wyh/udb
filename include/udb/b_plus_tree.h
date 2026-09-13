@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <memory>
+#include <shared_mutex>
 #include <utility>
 #include <vector>
 
@@ -29,8 +30,8 @@ struct BPlusTreeOptions {
     std::size_t string_max_length = 0;
 };
 
-// Single-threaded persistent int64_t -> RID(s) B+ tree. All pages are accessed
-// through the supplied BufferPoolManager. The caller persists root_page_id.
+// Thread-safe persistent key -> RID(s) B+ tree. All pages are accessed through
+// the supplied BufferPoolManager. The caller persists root_page_id.
 class BPlusTree {
 public:
     explicit BPlusTree(BufferPoolManager& pool, BPlusTreeOptions options = {});
@@ -43,8 +44,8 @@ public:
         BufferPoolManager& pool, page_id_t header_page_id,
         BPlusTreeOptions options = {});
 
-    page_id_t GetRootPageId() const { return root_page_id_; }
-    page_id_t GetHeaderPageId() const { return header_page_id_; }
+    page_id_t GetRootPageId() const;
+    page_id_t GetHeaderPageId() const;
     // Refresh cached root identity after a transaction restores the header page.
     void ReloadRootFromHeader();
     std::optional<RID> GetValue(const IndexKey& key) const;
@@ -104,6 +105,7 @@ private:
     void RebalanceAfterDelete(page_id_t page_id, Node node);
     void DeleteNode(page_id_t page_id);
     std::vector<page_id_t> CollectNodePageIds() const;
+    void ValidateTree() const;
     page_id_t NewHeaderPage();
     void WriteHeader();
     static page_id_t ReadHeader(BufferPoolManager& pool, page_id_t header_page_id,
@@ -113,6 +115,7 @@ private:
     page_id_t root_page_id_ = -1;
     page_id_t header_page_id_ = -1;
     BPlusTreeOptions options_;
+    mutable std::shared_mutex mutex_;
 };
 
 }  // namespace udb
