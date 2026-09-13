@@ -168,6 +168,45 @@ UndoRecord TransactionManager::GetUndoRecord(VersionLink link) const {
     return transaction->second->undo_records_[link.undo_index];
 }
 
+std::optional<RecordVersion> TransactionManager::ReconstructVersion(
+    RID rid, const Record& current, TupleMeta current_meta,
+    timestamp_t read_timestamp) const {
+    if (rid.page_id < 0) {
+        throw std::invalid_argument("Version reconstruction requires a valid RID");
+    }
+    if (current_meta.timestamp <= read_timestamp) {
+        if (current_meta.is_deleted) { return std::nullopt; }
+        return RecordVersion{current, current_meta};
+    }
+
+    const std::lock_guard<std::mutex> lock(undo_mutex_);
+    const auto head = version_links_.find(rid);
+    std::optional<VersionLink> link =
+        head == version_links_.end() ? std::nullopt
+                                     : std::optional<VersionLink>(head->second);
+    std::set<VersionLink> visited;
+    while (link) {
+        if (!visited.insert(*link).second) {
+            throw std::runtime_error("Undo version chain contains a cycle");
+        }
+        const auto owner = transactions_.find(link->transaction_id);
+        if (owner == transactions_.end() ||
+            link->undo_index >= owner->second->undo_records_.size()) {
+            throw std::runtime_error("Undo version chain contains a dangling link");
+        }
+        const auto& undo = owner->second->undo_records_[link->undo_index];
+        if (undo.rid != rid) {
+            throw std::runtime_error("Undo version chain points to a different RID");
+        }
+        if (undo.meta.timestamp <= read_timestamp) {
+            if (undo.meta.is_deleted) { return std::nullopt; }
+            return RecordVersion{undo.record, undo.meta};
+        }
+        link = undo.previous;
+    }
+    return std::nullopt;
+}
+
 void TransactionManager::DiscardUndoRecords(Transaction& transaction) {
     const std::lock_guard<std::mutex> lock(undo_mutex_);
     for (std::size_t i = transaction.undo_records_.size(); i != 0; --i) {

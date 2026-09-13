@@ -528,3 +528,11 @@
 - 测试结果：全新构建无警告，64 / 64 测试及 ASan / UBSan 通过，覆盖多版本链、独立 RID、二进制旧值、提交保留与回滚恢复，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 65：Version Reconstruction。
+
+## 阶段 65：Version Reconstruction
+
+- 做了什么：实现按 read timestamp 从当前物理 tuple 和 Undo 链重建可见 RecordVersion。
+- 关键设计：选择不晚于 snapshot 的最近版本；可见 tombstone 和插入前 snapshot 返回无记录；单次重建持有链锁并检测悬空、跨 RID 与循环链接。
+- 测试结果：全新构建无警告，65 / 65 测试及 ASan / UBSan 通过，覆盖当前/历史/二进制版本、删除与重新插入可见性及无历史边界，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 66：Snapshot Reads。

@@ -8,6 +8,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <tuple>
 #include <vector>
 
 #include "udb/page.h"
@@ -39,6 +40,10 @@ struct VersionLink {
     friend bool operator!=(const VersionLink& left, const VersionLink& right) {
         return !(left == right);
     }
+    friend bool operator<(const VersionLink& left, const VersionLink& right) {
+        return std::tie(left.transaction_id, left.undo_index) <
+               std::tie(right.transaction_id, right.undo_index);
+    }
 };
 
 struct UndoRecord {
@@ -46,6 +51,11 @@ struct UndoRecord {
     Record record;
     TupleMeta meta;
     std::optional<VersionLink> previous;
+};
+
+struct RecordVersion {
+    Record record;
+    TupleMeta meta;
 };
 
 struct RowLockId {
@@ -114,6 +124,9 @@ public:
                                  const Record& record, TupleMeta meta);
     std::optional<VersionLink> GetVersionLink(RID rid) const;
     UndoRecord GetUndoRecord(VersionLink link) const;
+    std::optional<RecordVersion> ReconstructVersion(RID rid, const Record& current,
+                                                    TupleMeta current_meta,
+                                                    timestamp_t read_timestamp) const;
 
 private:
     Transaction& RequireManaged(Transaction& transaction);
