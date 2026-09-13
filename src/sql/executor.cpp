@@ -164,6 +164,10 @@ void FinishPipeline(ExecutionResult& result, std::unique_ptr<ExecutionOperator> 
 
 ExecutionResult Executor::Execute(const PlanNode& plan) {
     switch (plan.GetType()) {
+        case PlanType::Begin:
+        case PlanType::Commit:
+        case PlanType::Rollback:
+            throw std::invalid_argument("Transaction commands are executed by SqlEngine");
         case PlanType::CreateTable: {
             const auto& create = dynamic_cast<const CreateTablePlan&>(plan);
             ExecutionResult result{PlanType::CreateTable};
@@ -526,6 +530,12 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
 ExecutionResult Executor::Execute(const PlanNode& plan, ExecutionContext& context) {
     auto& transaction = context.GetTransaction();
     if (!transaction.IsActive()) { throw std::logic_error("Execution transaction is not active"); }
+    auto& pool = catalog_.GetBufferPoolManager();
+    pool.SetActiveTransaction(&transaction);
+    struct ActiveTransactionReset {
+        BufferPoolManager& pool;
+        ~ActiveTransactionReset() { pool.SetActiveTransaction(nullptr); }
+    } reset{pool};
     auto result = Execute(plan);
     result.transaction_id = transaction.GetId();
     return result;

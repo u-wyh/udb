@@ -1,4 +1,5 @@
 #include "udb/buffer_pool_manager.h"
+#include "udb/transaction.h"
 
 #include <algorithm>
 #include <limits>
@@ -87,11 +88,36 @@ ReadPageGuard BufferPoolManager::ReadPage(page_id_t page_id) {
 }
 
 WritePageGuard BufferPoolManager::WritePage(page_id_t page_id) {
-    return WritePageGuard(*this, page_id, FetchPage(page_id));
+    auto* page = FetchPage(page_id);
+    try {
+        if (active_transaction_ != nullptr &&
+            active_transaction_->allocated_pages_.count(page_id) == 0 &&
+            active_transaction_->freed_pages_.count(page_id) == 0) {
+            active_transaction_->before_images_.emplace(page_id, *page);
+        }
+    } catch (...) {
+        UnpinPage(page_id, false);
+        throw;
+    }
+    return WritePageGuard(*this, page_id, page);
 }
 
 WritePageGuard BufferPoolManager::NewPageGuard() {
     const auto [page_id, page] = NewPage();
+    if (active_transaction_ != nullptr) {
+        try {
+            if (active_transaction_->freed_pages_.count(page_id) == 0) {
+                active_transaction_->allocated_pages_.insert(page_id);
+            }
+        } catch (...) {
+            UnpinPage(page_id, false);
+            auto* transaction = active_transaction_;
+            active_transaction_ = nullptr;
+            DeletePage(page_id);
+            active_transaction_ = transaction;
+            throw;
+        }
+    }
     return WritePageGuard(*this, page_id, page);
 }
 
@@ -127,6 +153,19 @@ bool BufferPoolManager::CanDeletePage(page_id_t page_id) const {
 bool BufferPoolManager::DeletePage(page_id_t page_id) {
     if (!CanDeletePage(page_id)) { return false; }
     const auto found = page_table_.find(page_id);
+    if (active_transaction_ != nullptr) {
+        if (active_transaction_->allocated_pages_.erase(page_id) == 0) {
+            auto before = active_transaction_->before_images_.find(page_id);
+            if (before != active_transaction_->before_images_.end()) {
+                active_transaction_->freed_pages_.emplace(page_id, before->second);
+                active_transaction_->before_images_.erase(before);
+            } else if (found != page_table_.end()) {
+                active_transaction_->freed_pages_.emplace(page_id, frames_[found->second].page);
+            } else {
+                active_transaction_->freed_pages_.emplace(page_id, disk_.ReadPage(page_id));
+            }
+        }
+    }
     if (found == page_table_.end()) {
         disk_.DeallocatePage(page_id);
         return true;
@@ -137,6 +176,58 @@ bool BufferPoolManager::DeletePage(page_id_t page_id) {
     frames_[index] = Frame{};
     Touch(index);
     return true;
+}
+
+void BufferPoolManager::SetActiveTransaction(Transaction* transaction) {
+    if (transaction != nullptr && !transaction->IsActive()) {
+        throw std::logic_error("Buffer pool transaction is not active");
+    }
+    if (active_transaction_ != nullptr && transaction != nullptr &&
+        active_transaction_ != transaction) {
+        throw std::logic_error("Another transaction is already using the buffer pool");
+    }
+    active_transaction_ = transaction;
+}
+
+void BufferPoolManager::RollbackTransaction(Transaction& transaction) {
+    if (active_transaction_ != nullptr && active_transaction_ != &transaction) {
+        throw std::logic_error("Cannot roll back a different active transaction");
+    }
+    active_transaction_ = nullptr;
+
+    for (const auto page_id : transaction.allocated_pages_) {
+        if (disk_.IsPageAllocated(page_id) && !DeletePage(page_id)) {
+            throw std::logic_error("Allocated transaction page is still pinned");
+        }
+    }
+    for (const auto& [page_id, page] : transaction.freed_pages_) {
+        if (disk_.IsPageAllocated(page_id)) {
+            disk_.WritePage(page_id, page);
+        } else {
+            disk_.RestorePage(page_id, page);
+        }
+        const auto found = page_table_.find(page_id);
+        if (found != page_table_.end()) {
+            auto& frame = frames_[found->second];
+            if (frame.pin_count != 0) {
+                throw std::logic_error("Reallocated transaction page is still pinned");
+            }
+            frame.page = page;
+            frame.dirty = false;
+        }
+    }
+    for (const auto& [page_id, page] : transaction.before_images_) {
+        disk_.WritePage(page_id, page);
+        const auto found = page_table_.find(page_id);
+        if (found != page_table_.end()) {
+            auto& frame = frames_[found->second];
+            if (frame.pin_count != 0) {
+                throw std::logic_error("Transaction page is still pinned during rollback");
+            }
+            frame.page = page;
+            frame.dirty = false;
+        }
+    }
 }
 
 }  // namespace udb

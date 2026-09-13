@@ -85,6 +85,11 @@ BPlusTree::BPlusTree(BufferPoolManager& pool, page_id_t root_page_id,
     Validate();
 }
 
+void BPlusTree::ReloadRootFromHeader() {
+    if (header_page_id_ < 0) { throw std::logic_error("B+ tree has no header page"); }
+    root_page_id_ = ReadHeader(pool_, header_page_id_);
+}
+
 std::unique_ptr<BPlusTree> BPlusTree::CreateWithHeader(
     BufferPoolManager& pool, BPlusTreeOptions options) {
     auto tree = std::make_unique<BPlusTree>(pool, options);

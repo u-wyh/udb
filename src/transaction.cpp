@@ -1,4 +1,5 @@
 #include "udb/transaction.h"
+#include "udb/buffer_pool_manager.h"
 
 #include <limits>
 #include <stdexcept>
@@ -27,12 +28,19 @@ Transaction& TransactionManager::RequireManaged(Transaction& transaction) {
 void TransactionManager::Commit(Transaction& transaction) {
     auto& managed = RequireManaged(transaction);
     if (!managed.IsActive()) { throw std::logic_error("Transaction is not active"); }
+    managed.before_images_.clear();
+    managed.allocated_pages_.clear();
+    managed.freed_pages_.clear();
     managed.state_ = TransactionState::Committed;
 }
 
 void TransactionManager::Abort(Transaction& transaction) {
     auto& managed = RequireManaged(transaction);
     if (!managed.IsActive()) { throw std::logic_error("Transaction is not active"); }
+    if (pool_ != nullptr) { pool_->RollbackTransaction(managed); }
+    managed.before_images_.clear();
+    managed.allocated_pages_.clear();
+    managed.freed_pages_.clear();
     managed.state_ = TransactionState::Aborted;
 }
 

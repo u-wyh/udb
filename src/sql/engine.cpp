@@ -4,13 +4,99 @@
 #include "udb/sql/parser.h"
 #include "udb/sql/planner.h"
 
+#include <cctype>
+#include <stdexcept>
+#include <string>
+#include <variant>
+
 namespace udb::sql {
 
+namespace {
+
+std::string NormalizeCommand(std::string_view sql) {
+    std::size_t begin = 0;
+    std::size_t end = sql.size();
+    while (begin < end && std::isspace(static_cast<unsigned char>(sql[begin]))) { ++begin; }
+    while (end > begin && std::isspace(static_cast<unsigned char>(sql[end - 1]))) { --end; }
+    if (end > begin && sql[end - 1] == ';') {
+        --end;
+        while (end > begin && std::isspace(static_cast<unsigned char>(sql[end - 1]))) { --end; }
+    }
+    std::string command(sql.substr(begin, end - begin));
+    for (auto& character : command) {
+        character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
+    }
+    return command;
+}
+
+bool IsDdl(const Statement& statement) {
+    return std::holds_alternative<CreateTableStatement>(statement) ||
+           std::holds_alternative<CreateIndexStatement>(statement) ||
+           std::holds_alternative<DropTableStatement>(statement) ||
+           std::holds_alternative<DropIndexStatement>(statement);
+}
+
+void ReloadIndexRoots(Catalog& catalog) {
+    for (const auto index_id : catalog.ListIndexes()) {
+        catalog.GetIndex(index_id).GetTree().ReloadRootFromHeader();
+    }
+}
+
+}  // namespace
+
 ExecutionResult SqlEngine::ExecuteSQL(std::string_view sql) {
+    const auto command = NormalizeCommand(sql);
+    if (command == "BEGIN") {
+        if (current_transaction_ != nullptr) {
+            throw std::logic_error("A transaction is already active");
+        }
+        current_transaction_ = &transaction_manager_.Begin();
+        ExecutionResult result{PlanType::Begin};
+        result.transaction_id = current_transaction_->GetId();
+        return result;
+    }
+    if (command == "COMMIT") {
+        if (current_transaction_ == nullptr) { throw std::logic_error("No active transaction"); }
+        const auto id = current_transaction_->GetId();
+        transaction_manager_.Commit(*current_transaction_);
+        current_transaction_ = nullptr;
+        ExecutionResult result{PlanType::Commit};
+        result.transaction_id = id;
+        return result;
+    }
+    if (command == "ROLLBACK") {
+        if (current_transaction_ == nullptr) { throw std::logic_error("No active transaction"); }
+        const auto id = current_transaction_->GetId();
+        transaction_manager_.Abort(*current_transaction_);
+        ReloadIndexRoots(catalog_);
+        current_transaction_ = nullptr;
+        ExecutionResult result{PlanType::Rollback};
+        result.transaction_id = id;
+        return result;
+    }
+
     const auto statement = Parser::Parse(sql);
+    if (current_transaction_ != nullptr && IsDdl(statement)) {
+        throw std::invalid_argument("DDL is not supported inside an explicit transaction");
+    }
     const auto bound = Binder(catalog_).Bind(statement);
     const auto plan = Planner::Plan(bound, catalog_);
-    return executor_.Execute(*plan);
+    const bool autocommit = current_transaction_ == nullptr;
+    auto* transaction = autocommit ? &transaction_manager_.Begin() : current_transaction_;
+    ExecutionContext context(*transaction);
+    try {
+        auto result = executor_.Execute(*plan, context);
+        if (autocommit) {
+            transaction_manager_.Commit(*transaction);
+            result.transaction_id.reset();
+        }
+        return result;
+    } catch (...) {
+        transaction_manager_.Abort(*transaction);
+        ReloadIndexRoots(catalog_);
+        if (!autocommit) { current_transaction_ = nullptr; }
+        throw;
+    }
 }
 
 ExecutionResult SqlEngine::ExecuteSQL(std::string_view sql, ExecutionContext& context) {

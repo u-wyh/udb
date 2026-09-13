@@ -400,3 +400,11 @@
 - 测试结果：全新构建无警告，48 / 48 测试及 ASan / UBSan 通过，覆盖状态转换、归属校验、上下文传播和错误路径，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 49：Explicit Transactions。
+
+## 阶段 49：Explicit Transactions
+
+- 做了什么：实现 BEGIN / COMMIT / ROLLBACK 与 autocommit，并支持单线程事务回滚。
+- 关键设计：WritePageGuard 首次写入捕获整页 before-image；页面分配与释放进入事务写集；显式事务拒绝 DDL。
+- 测试结果：全新构建无警告，49 / 49 测试及 ASan / UBSan 通过，覆盖 DML、索引、跨页、allocate/free、约束失败与重开持久性，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 50：WAL Foundation。

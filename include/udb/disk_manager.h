@@ -24,6 +24,8 @@ public:
     // Released pages remain physically present but cannot be read or written.
     // Invalid IDs throw out_of_range; double free throws logic_error.
     void DeallocatePage(page_id_t page_id);
+    // Transaction rollback only: restore a currently free page and its image.
+    void RestorePage(page_id_t page_id, const Page& page);
     // Only allocated IDs are valid. Invalid IDs throw std::out_of_range;
     // malformed files and I/O failures throw std::runtime_error.
     void WritePage(page_id_t page_id, const Page& page);

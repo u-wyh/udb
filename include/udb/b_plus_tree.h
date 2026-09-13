@@ -45,6 +45,8 @@ public:
 
     page_id_t GetRootPageId() const { return root_page_id_; }
     page_id_t GetHeaderPageId() const { return header_page_id_; }
+    // Refresh cached root identity after a transaction restores the header page.
+    void ReloadRootFromHeader();
     std::optional<RID> GetValue(const IndexKey& key) const;
     std::vector<RID> GetValues(const IndexKey& key) const;
     void ValidateKey(const IndexKey& key) const;

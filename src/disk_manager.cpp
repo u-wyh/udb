@@ -96,6 +96,13 @@ void DiskManager::DeallocatePage(page_id_t page_id) {
     }
 }
 
+void DiskManager::RestorePage(page_id_t page_id, const Page& page) {
+    const auto found = free_pages_.find(page_id);
+    if (found == free_pages_.end()) { throw std::logic_error("Page is not free"); }
+    WriteAt(page_id, page);
+    free_pages_.erase(found);
+}
+
 void DiskManager::RestoreFreePageIds(const std::vector<page_id_t>& page_ids) {
     std::set<page_id_t> restored;
     for (const auto page_id : page_ids) {

@@ -12,6 +12,7 @@
 namespace udb::sql {
 
 enum class PlanType {
+    Begin, Commit, Rollback,
     CreateTable, CreateIndex, DropTable, DropIndex, Insert, SeqScan, IndexScan,
     IndexRangeScan, IndexOnlyScan, CrossJoin, NestedLoopJoin, HashJoin, Aggregate, Delete, Update
 };

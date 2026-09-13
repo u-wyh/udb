@@ -34,6 +34,7 @@ public:
     const TableHeap& GetTableHeap(table_id_t id) const;
     const TableHeap& GetTableHeap(const std::string& name) const;
     std::vector<table_id_t> ListTables() const;  // Ascending ID order; snapshot.
+    BufferPoolManager& GetBufferPoolManager() { return pool_; }
     const TableStatistics& AnalyzeTable(table_id_t id);
     const TableStatistics& AnalyzeTable(const std::string& name);
     bool HasTableStatistics(table_id_t id) const;

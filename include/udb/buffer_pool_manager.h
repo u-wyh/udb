@@ -9,6 +9,8 @@
 
 namespace udb {
 
+class Transaction;
+
 // Single-threaded. DiskManager must outlive the pool; access its pages only
 // through this pool while cached. Page pointers remain valid while pinned.
 // Storage code uses ReadPage/WritePage/NewPageGuard so pin ownership and dirty
@@ -38,6 +40,8 @@ public:
     // Invalid/free IDs throw through DiskManager. Dirty deleted pages are discarded.
     bool CanDeletePage(page_id_t page_id) const;
     bool DeletePage(page_id_t page_id);
+    void SetActiveTransaction(Transaction* transaction);
+    void RollbackTransaction(Transaction& transaction);
 
 private:
     struct Frame {
@@ -54,6 +58,7 @@ private:
     Page* Install(std::size_t index, page_id_t page_id, const Page& page);
 
     DiskManager& disk_;
+    Transaction* active_transaction_ = nullptr;
     std::vector<Frame> frames_;
     std::unordered_map<page_id_t, std::size_t> page_table_;
     // All frame indices, least to most recently fetched/created. Bounded O(n)
