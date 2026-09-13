@@ -3,17 +3,17 @@
 ## MVCC 前正确性地基
 
 - 61. Same-page Transaction Safety：补齐两个事务修改同一物理页不同 RID 时的 abort/crash 测试；保证现有 full-page WAL / rollback 不会互相覆盖。必要时增加 transaction-lifetime page write ownership。
-- 62. MVCC Timestamp Core：Transaction 增加 ，实现全局 commit timestamp 和 active transaction watermark。
+- 62. MVCC Timestamp Core：Transaction 增加 `read_ts / commit_ts`，实现全局 commit timestamp 和 active transaction watermark。
 
 ## Version Storage
 
-- 63. TupleMeta：为 RID 对应的物理 tuple 增加独立 ；不得污染 Tuple/Record 逻辑格式；持久化格式版本化并处理现有数据库兼容。
+- 63. TupleMeta：为 RID 对应的物理 tuple 增加独立 `TupleMeta{timestamp, is_deleted}`；不得污染 Tuple/Record 逻辑格式；持久化格式版本化并处理现有数据库兼容。
 - 64. Undo Version Chain：实现 transaction-owned UndoRecord 和 RID → VersionLink；旧版本保存完整旧 Record + TupleMeta。
 - 65. Version Reconstruction：给定 transaction snapshot，从当前 tuple 沿 undo chain 重建其可见版本。
 
 ## Snapshot Isolation
 
-- 66. Snapshot Reads：新增 Snapshot Isolation；SELECT/TableScan/IndexScan 根据  做 MVCC visibility；snapshot reader 不获取普通行 S 锁。
+- 66. Snapshot Reads：新增 Snapshot Isolation；SELECT/TableScan/IndexScan 根据 `read_ts` 做 MVCC visibility；snapshot reader 不获取普通行 S 锁。
 - 67. MVCC DML：INSERT / UPDATE / DELETE 创建版本；DELETE 使用 logical tombstone；支持 read-your-own-write、commit stamping、abort undo。
 - 68. Write Conflict：实现 first-writer/first-committer 冲突检测，阻止 lost update，并保证 unique constraint 在并发版本下正确。
 
