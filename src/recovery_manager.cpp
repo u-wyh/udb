@@ -1,5 +1,6 @@
 #include "udb/recovery_manager.h"
 
+#include <algorithm>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -79,14 +80,25 @@ std::map<page_id_t, bool> RecoveryManager::Recover(
     }
 
     std::map<page_id_t, bool> page_states;
-    // Transactions are single-threaded in this stage, so applying each unit in
-    // WAL order preserves page reuse across committed and aborted units.
-    for (const auto& unit : units) {
-        if (unit.state == UnitState::Committed) {
-            for (const auto index : unit.records) { Redo(disk, records[index], page_states); }
+    // Strict 2PL serializes conflicting page writers by transaction end, which
+    // can differ from BEGIN order when sessions run concurrently. Replay ended
+    // units by their terminal WAL position; active losers follow all ended work.
+    std::vector<const Unit*> replay_order;
+    replay_order.reserve(units.size());
+    for (const auto& unit : units) { replay_order.push_back(&unit); }
+    std::stable_sort(replay_order.begin(), replay_order.end(),
+                     [](const Unit* left, const Unit* right) {
+                         const bool left_active = left->state == UnitState::Active;
+                         const bool right_active = right->state == UnitState::Active;
+                         if (left_active != right_active) { return !left_active; }
+                         return left->records.back() < right->records.back();
+                     });
+    for (const auto* unit : replay_order) {
+        if (unit->state == UnitState::Committed) {
+            for (const auto index : unit->records) { Redo(disk, records[index], page_states); }
         } else {
-            for (auto position = unit.records.size(); position > 0; --position) {
-                Undo(disk, records[unit.records[position - 1]], page_states);
+            for (auto position = unit->records.size(); position > 0; --position) {
+                Undo(disk, records[unit->records[position - 1]], page_states);
             }
         }
     }
