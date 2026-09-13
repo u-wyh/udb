@@ -568,3 +568,11 @@
 - 测试结果：全新构建无警告，69 / 69 测试及 ASan / UBSan 通过，覆盖 unique、non-unique、INTEGER、BIGINT、VARCHAR、复合索引、NULL、DELETE 与回滚，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 70：MVCC Index-only Scan。
+
+## 阶段 70：MVCC Index-only Scan
+
+- 做了什么：让 snapshot IndexOnlyScan 在可证明安全时直接使用 covering key，并对未来、未提交与 stale 条目回表重建版本。
+- 关键设计：当前条目以 TupleMeta 的 owner/commit timestamp 证明可见性；stale entry 永不直接覆盖返回；所有回退路径保留完整 predicate 校验。
+- 测试结果：全新构建无警告，70 / 70 测试及 ASan / UBSan 通过，覆盖精确/范围、unique/non-unique、VARCHAR、自身写、未来版本和 tombstone，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 71：Vacuum + Watermark。

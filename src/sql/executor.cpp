@@ -480,22 +480,62 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
             if (ReachedLimit(scan.GetLimit(), 0)) { return result; }
             if (context && context->GetTransaction().GetIsolationLevel() ==
                                IsolationLevel::SnapshotIsolation) {
-                std::vector<std::pair<IndexKey, RID>> entries;
+                struct CoveringCandidate {
+                    IndexKey key;
+                    RID rid;
+                    bool current;
+                };
+                std::vector<CoveringCandidate> entries;
                 if (scan.GetExactKey()) {
-                    for (const auto rid : VersionAwareExactLookup(
-                             index, *scan.GetExactKey(), context)) {
-                        entries.emplace_back(*scan.GetExactKey(), rid);
+                    for (const auto rid : index.GetTree().GetValues(*scan.GetExactKey())) {
+                        entries.push_back({*scan.GetExactKey(), rid, true});
                     }
                 } else {
-                    entries = VersionAwareRangeLookup(
-                        index, scan.GetLowerBound(), scan.IsLowerInclusive(),
-                        scan.GetUpperBound(), scan.IsUpperInclusive(), context);
+                    for (const auto& [key, rid] : index.GetTree().ScanKeys(
+                             scan.GetLowerBound(), scan.IsLowerInclusive(),
+                             scan.GetUpperBound(), scan.IsUpperInclusive())) {
+                        entries.push_back({key, rid, true});
+                    }
                 }
+                auto* versions = SnapshotVersions(context);
+                for (const auto& [key, rid] : versions->GetStaleIndexEntries(
+                         index.GetMetadata().GetIndexId())) {
+                    const bool selected = scan.GetExactKey()
+                        ? key == *scan.GetExactKey()
+                        : InIndexRange(key, scan.GetLowerBound(), scan.IsLowerInclusive(),
+                                       scan.GetUpperBound(), scan.IsUpperInclusive());
+                    if (selected) { entries.push_back({key, rid, false}); }
+                }
+                std::sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
+                    if (left.key != right.key) { return left.key < right.key; }
+                    if (left.rid != right.rid) { return left.rid < right.rid; }
+                    return left.current > right.current;
+                });
+                entries.erase(std::unique(entries.begin(), entries.end(),
+                    [](const auto& left, const auto& right) {
+                        return left.key == right.key && left.rid == right.rid;
+                    }), entries.end());
                 std::vector<Tuple> rows;
                 const auto& heap = catalog_.GetTableHeap(scan.GetTableId());
-                for (const auto& [key, rid] : entries) {
-                    static_cast<void>(key);
-                    const auto tuple = ReadTuple(heap, rid, source, context);
+                const auto& transaction = context->GetTransaction();
+                for (const auto& entry : entries) {
+                    const auto meta = heap.GetTupleMeta(entry.rid);
+                    const bool owned = TransactionManager::IsTransactionTimestamp(meta.timestamp) &&
+                        TransactionManager::DecodeTransactionTimestamp(meta.timestamp) ==
+                            transaction.GetId();
+                    const bool committed_visible =
+                        !TransactionManager::IsTransactionTimestamp(meta.timestamp) &&
+                        meta.timestamp <= transaction.GetReadTimestamp();
+                    if (entry.current && !meta.is_deleted && (owned || committed_visible)) {
+                        const auto value = IndexKeyValue(
+                            entry.key, source.GetColumn(columns[0]).GetType());
+                        if (Matches(scan.GetPredicate(),
+                                    IndexSourceTuple(source, columns[0], value))) {
+                            rows.emplace_back(output, std::vector<Value>{value});
+                        }
+                        continue;
+                    }
+                    const auto tuple = ReadTuple(heap, entry.rid, source, context);
                     if (tuple && Matches(scan.GetPredicate(), *tuple)) {
                         rows.emplace_back(output,
                                           std::vector<Value>{tuple->GetValue(columns[0])});
