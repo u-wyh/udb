@@ -130,8 +130,60 @@ void TransactionManager::Abort(Transaction& transaction,
         UnregisterReadTimestamp(managed.read_ts_);
     }
     if (before_unlock) { before_unlock(); }
+    DiscardUndoRecords(managed);
     if (pool_ != nullptr) { pool_->ReleaseTransactionPages(managed); }
     if (lock_manager_ != nullptr) { lock_manager_->UnlockAll(managed); }
+}
+
+VersionLink TransactionManager::AppendUndoRecord(Transaction& transaction, RID rid,
+                                                 const Record& record, TupleMeta meta) {
+    auto& managed = RequireManaged(transaction);
+    if (!managed.IsActive()) { throw std::logic_error("Transaction is not active"); }
+    if (rid.page_id < 0) { throw std::invalid_argument("Undo record requires a valid RID"); }
+    const std::lock_guard<std::mutex> lock(undo_mutex_);
+    const auto found = version_links_.find(rid);
+    const std::optional<VersionLink> previous =
+        found == version_links_.end() ? std::nullopt
+                                      : std::optional<VersionLink>(found->second);
+    managed.undo_records_.push_back(UndoRecord{rid, record, meta, previous});
+    const VersionLink link{managed.GetId(), managed.undo_records_.size() - 1};
+    version_links_.insert_or_assign(rid, link);
+    return link;
+}
+
+std::optional<VersionLink> TransactionManager::GetVersionLink(RID rid) const {
+    const std::lock_guard<std::mutex> lock(undo_mutex_);
+    const auto found = version_links_.find(rid);
+    return found == version_links_.end() ? std::nullopt
+                                         : std::optional<VersionLink>(found->second);
+}
+
+UndoRecord TransactionManager::GetUndoRecord(VersionLink link) const {
+    const std::lock_guard<std::mutex> lock(undo_mutex_);
+    const auto transaction = transactions_.find(link.transaction_id);
+    if (transaction == transactions_.end() ||
+        link.undo_index >= transaction->second->undo_records_.size()) {
+        throw std::out_of_range("Undo version link does not exist");
+    }
+    return transaction->second->undo_records_[link.undo_index];
+}
+
+void TransactionManager::DiscardUndoRecords(Transaction& transaction) {
+    const std::lock_guard<std::mutex> lock(undo_mutex_);
+    for (std::size_t i = transaction.undo_records_.size(); i != 0; --i) {
+        const auto& undo = transaction.undo_records_[i - 1];
+        const VersionLink discarded{transaction.GetId(), i - 1};
+        const auto current = version_links_.find(undo.rid);
+        if (current == version_links_.end() || current->second != discarded) {
+            throw std::logic_error("Undo version chain head changed before abort");
+        }
+        if (undo.previous) {
+            current->second = *undo.previous;
+        } else {
+            version_links_.erase(current);
+        }
+    }
+    transaction.undo_records_.clear();
 }
 
 Transaction& TransactionManager::GetTransaction(transaction_id_t id) { return *transactions_.at(id); }

@@ -520,3 +520,11 @@
 - 测试结果：全新构建无警告，63 / 63 测试及 ASan / UBSan 通过，覆盖二进制 Record 隔离、重开持久化、v1 兼容升级和失败原子性，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 64：Undo Version Chain。
+
+## 阶段 64：Undo Version Chain
+
+- 做了什么：实现 Transaction 持有的 UndoRecord 和 TransactionManager 管理的 RID 到 VersionLink 链头映射。
+- 关键设计：每个旧版本完整保存 Record、TupleMeta 与前驱链接；提交保留历史供旧 snapshot 使用；回滚移除本事务版本并恢复原链头。
+- 测试结果：全新构建无警告，64 / 64 测试及 ASan / UBSan 通过，覆盖多版本链、独立 RID、二进制旧值、提交保留与回滚恢复，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 65：Version Reconstruction。
