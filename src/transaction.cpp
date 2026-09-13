@@ -38,6 +38,7 @@ Transaction& TransactionManager::RequireManaged(Transaction& transaction) {
 void TransactionManager::Commit(Transaction& transaction) {
     auto& managed = RequireManaged(transaction);
     if (!managed.IsActive()) { throw std::logic_error("Transaction is not active"); }
+    if (managed.IsAbortRequested()) { throw DeadlockError(); }
     if (pool_ != nullptr) { pool_->ThrowIfWriteError(); }
     if (log_manager_ != nullptr) {
         log_manager_->Append(LogRecord::Commit(managed.GetId()));

@@ -472,3 +472,11 @@
 - 测试结果：全新构建无警告，57 / 57 测试及 ASan / UBSan 通过，覆盖可重复读、脏读阻断、提交/回滚唤醒和不同表并发 DML，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 58：Deadlock。
+
+## 阶段 58：Deadlock
+
+- 做了什么：为 LockManager 增加 wait-for graph、环检测与死锁受害事务唤醒中止。
+- 关键设计：每次阻塞请求建立跨 table/row 资源依赖；选择环中 transaction_id 最大者；SqlEngine 通过已有 before-image/WAL Abort 路径回滚后释放锁。
+- 测试结果：全新构建无警告，58 / 58 测试及 ASan / UBSan 通过，覆盖等待图、确定性 victim、继续执行、数据回滚与 WAL ABORT，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 59：Isolation Levels。

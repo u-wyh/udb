@@ -1,8 +1,10 @@
 #include "udb/lock_manager.h"
 
 #include <algorithm>
+#include <functional>
 #include <iterator>
-#include <stdexcept>
+#include <optional>
+#include <vector>
 
 namespace udb {
 
@@ -37,8 +39,128 @@ bool LockManager::CanUpgrade(const Queue& queue, const Transaction& transaction)
                         });
 }
 
+std::map<transaction_id_t, std::set<transaction_id_t>>
+LockManager::BuildWaitsForGraphLocked() const {
+    std::map<transaction_id_t, std::set<transaction_id_t>> graph;
+    const auto add_queue = [&](const Queue& queue) {
+        for (auto request = queue.requests.begin(); request != queue.requests.end(); ++request) {
+            if (request->granted && !request->upgrading) { continue; }
+            const auto waiter = request->transaction->GetId();
+            graph[waiter];
+            if (request->upgrading) {
+                for (const auto& blocker : queue.requests) {
+                    if (blocker.granted && blocker.transaction != request->transaction) {
+                        graph[waiter].insert(blocker.transaction->GetId());
+                    }
+                }
+                continue;
+            }
+            if (queue.upgrader != nullptr && queue.upgrader != request->transaction) {
+                graph[waiter].insert(queue.upgrader->GetId());
+            }
+            for (auto blocker = queue.requests.begin(); blocker != request; ++blocker) {
+                if (!blocker->granted) {
+                    graph[waiter].insert(blocker->transaction->GetId());
+                }
+            }
+            for (const auto& blocker : queue.requests) {
+                if (blocker.granted && blocker.transaction != request->transaction &&
+                    !Compatible(blocker.mode, request->mode)) {
+                    graph[waiter].insert(blocker.transaction->GetId());
+                }
+            }
+        }
+    };
+    for (const auto& [resource, queue] : table_queues_) {
+        static_cast<void>(resource);
+        add_queue(*queue);
+    }
+    for (const auto& [resource, queue] : row_queues_) {
+        static_cast<void>(resource);
+        add_queue(*queue);
+    }
+    return graph;
+}
+
+std::map<transaction_id_t, std::set<transaction_id_t>>
+LockManager::GetWaitsForGraph() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return BuildWaitsForGraphLocked();
+}
+
+Transaction* LockManager::FindDeadlockVictimLocked() const {
+    const auto graph = BuildWaitsForGraphLocked();
+    std::map<transaction_id_t, Transaction*> transactions;
+    const auto collect = [&](const Queue& queue) {
+        for (const auto& request : queue.requests) {
+            transactions[request.transaction->GetId()] = request.transaction;
+        }
+    };
+    for (const auto& [resource, queue] : table_queues_) {
+        static_cast<void>(resource);
+        collect(*queue);
+    }
+    for (const auto& [resource, queue] : row_queues_) {
+        static_cast<void>(resource);
+        collect(*queue);
+    }
+
+    std::map<transaction_id_t, int> color;
+    std::vector<transaction_id_t> stack;
+    std::map<transaction_id_t, std::size_t> stack_positions;
+    std::optional<transaction_id_t> victim;
+    std::function<void(transaction_id_t)> visit = [&](transaction_id_t node) {
+        color[node] = 1;
+        stack_positions[node] = stack.size();
+        stack.push_back(node);
+        const auto edges = graph.find(node);
+        if (edges != graph.end()) {
+            for (const auto next : edges->second) {
+                if (color[next] == 0) {
+                    visit(next);
+                } else if (color[next] == 1) {
+                    const auto begin = stack_positions.at(next);
+                    for (auto index = begin; index < stack.size(); ++index) {
+                        if (!victim.has_value() || stack[index] > *victim) {
+                            victim = stack[index];
+                        }
+                    }
+                }
+            }
+        }
+        stack.pop_back();
+        stack_positions.erase(node);
+        color[node] = 2;
+    };
+    for (const auto& [node, edges] : graph) {
+        static_cast<void>(edges);
+        if (color[node] == 0) { visit(node); }
+    }
+    if (!victim.has_value()) { return nullptr; }
+    return transactions.at(*victim);
+}
+
+void LockManager::NotifyAllLocked() {
+    for (const auto& [resource, queue] : table_queues_) {
+        static_cast<void>(resource);
+        queue->condition.notify_all();
+    }
+    for (const auto& [resource, queue] : row_queues_) {
+        static_cast<void>(resource);
+        queue->condition.notify_all();
+    }
+}
+
+void LockManager::DetectDeadlockLocked() {
+    auto* victim = FindDeadlockVictimLocked();
+    if (victim == nullptr) { return; }
+    victim->abort_requested_ = true;
+    NotifyAllLocked();
+}
+
 void LockManager::LockTable(Transaction& transaction, LockMode mode, table_id_t table_id) {
     if (!transaction.IsActive()) { throw std::logic_error("Cannot lock for an inactive transaction"); }
+    if (transaction.IsAbortRequested()) { throw DeadlockError(); }
     std::unique_lock<std::mutex> lock(mutex_);
     auto& queue = table_queues_[table_id];
     if (!queue) { queue = std::make_shared<Queue>(); }
@@ -57,7 +179,16 @@ void LockManager::LockTableLocked(std::unique_lock<std::mutex>& lock, Transactio
         }
         queue->upgrader = &transaction;
         request->upgrading = true;
-        queue->condition.wait(lock, [&] { return CanUpgrade(*queue, transaction); });
+        DetectDeadlockLocked();
+        queue->condition.wait(lock, [&] {
+            return transaction.IsAbortRequested() || CanUpgrade(*queue, transaction);
+        });
+        if (transaction.IsAbortRequested()) {
+            request->upgrading = false;
+            queue->upgrader = nullptr;
+            queue->condition.notify_all();
+            throw DeadlockError();
+        }
         request->mode = LockMode::Exclusive;
         request->upgrading = false;
         queue->upgrader = nullptr;
@@ -68,7 +199,15 @@ void LockManager::LockTableLocked(std::unique_lock<std::mutex>& lock, Transactio
     }
     queue->requests.push_back(Request{&transaction, mode});
     request = std::prev(queue->requests.end());
-    queue->condition.wait(lock, [&] { return CanGrant(*queue, request); });
+    DetectDeadlockLocked();
+    queue->condition.wait(lock, [&] {
+        return transaction.IsAbortRequested() || CanGrant(*queue, request);
+    });
+    if (transaction.IsAbortRequested()) {
+        queue->requests.erase(request);
+        queue->condition.notify_all();
+        throw DeadlockError();
+    }
     request->granted = true;
     if (mode == LockMode::Shared) { transaction.shared_table_locks_.insert(table_id); }
     else { transaction.exclusive_table_locks_.insert(table_id); }
@@ -93,6 +232,7 @@ void LockManager::UnlockTable(Transaction& transaction, table_id_t table_id) {
 void LockManager::LockRow(Transaction& transaction, LockMode mode,
                           table_id_t table_id, RID rid) {
     if (!transaction.IsActive()) { throw std::logic_error("Cannot lock for an inactive transaction"); }
+    if (transaction.IsAbortRequested()) { throw DeadlockError(); }
     if (rid.page_id < 0) { throw std::invalid_argument("Row lock RID is invalid"); }
     std::unique_lock<std::mutex> lock(mutex_);
     const RowLockId resource{table_id, rid};
@@ -113,7 +253,16 @@ void LockManager::LockRowLocked(std::unique_lock<std::mutex>& lock, Transaction&
         }
         queue->upgrader = &transaction;
         request->upgrading = true;
-        queue->condition.wait(lock, [&] { return CanUpgrade(*queue, transaction); });
+        DetectDeadlockLocked();
+        queue->condition.wait(lock, [&] {
+            return transaction.IsAbortRequested() || CanUpgrade(*queue, transaction);
+        });
+        if (transaction.IsAbortRequested()) {
+            request->upgrading = false;
+            queue->upgrader = nullptr;
+            queue->condition.notify_all();
+            throw DeadlockError();
+        }
         request->mode = LockMode::Exclusive;
         request->upgrading = false;
         queue->upgrader = nullptr;
@@ -124,7 +273,15 @@ void LockManager::LockRowLocked(std::unique_lock<std::mutex>& lock, Transaction&
     }
     queue->requests.push_back(Request{&transaction, mode});
     request = std::prev(queue->requests.end());
-    queue->condition.wait(lock, [&] { return CanGrant(*queue, request); });
+    DetectDeadlockLocked();
+    queue->condition.wait(lock, [&] {
+        return transaction.IsAbortRequested() || CanGrant(*queue, request);
+    });
+    if (transaction.IsAbortRequested()) {
+        queue->requests.erase(request);
+        queue->condition.notify_all();
+        throw DeadlockError();
+    }
     request->granted = true;
     if (mode == LockMode::Shared) { transaction.shared_row_locks_.insert(resource); }
     else { transaction.exclusive_row_locks_.insert(resource); }

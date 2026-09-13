@@ -36,6 +36,7 @@ public:
     transaction_id_t GetId() const { return id_; }
     TransactionState GetState() const { return state_; }
     bool IsActive() const { return state_ == TransactionState::Active; }
+    bool IsAbortRequested() const { return abort_requested_.load(); }
     const std::set<table_id_t>& GetSharedTableLocks() const { return shared_table_locks_; }
     const std::set<table_id_t>& GetExclusiveTableLocks() const { return exclusive_table_locks_; }
     const std::set<RowLockId>& GetSharedRowLocks() const { return shared_row_locks_; }
@@ -48,6 +49,7 @@ private:
     explicit Transaction(transaction_id_t id) : id_(id) {}
     transaction_id_t id_;
     TransactionState state_ = TransactionState::Active;
+    std::atomic<bool> abort_requested_{false};
     std::map<page_id_t, Page> before_images_;
     std::set<page_id_t> allocated_pages_;
     std::map<page_id_t, Page> freed_pages_;
