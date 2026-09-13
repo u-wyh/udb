@@ -5,13 +5,14 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <mutex>
 #include <set>
 #include <vector>
 
 namespace udb {
 
-// Single-owner, synchronous page I/O. Not thread-safe; do not open the same
-// file through multiple managers concurrently. Flush is not an fsync guarantee.
+// Synchronous, mutex-protected page I/O. Do not open the same file through
+// multiple managers concurrently.
 class DiskManager {
 public:
     explicit DiskManager(const std::filesystem::path& path);
@@ -34,12 +35,10 @@ public:
     // Makes all prior data-file writes durable.
     void Sync();
 
-    page_id_t GetPageCount() const { return page_count_; }
-    page_id_t GetNextPageId() const {
-        return free_pages_.empty() ? page_count_ : *free_pages_.begin();
-    }
+    page_id_t GetPageCount() const;
+    page_id_t GetNextPageId() const;
     bool IsPageAllocated(page_id_t page_id) const;
-    const std::set<page_id_t>& GetFreePageIds() const { return free_pages_; }
+    std::set<page_id_t> GetFreePageIds() const;
     // Used only while opening database metadata. Validation is atomic.
     void RestoreFreePageIds(const std::vector<page_id_t>& page_ids);
     // Recovery bypasses the allocation map while replaying physical WAL, then
@@ -49,9 +48,11 @@ public:
 
 private:
     std::streamoff Offset(page_id_t page_id) const;
+    bool IsPageAllocatedUnlocked(page_id_t page_id) const;
     void WriteAt(page_id_t page_id, const Page& page);
 
     std::filesystem::path path_;
+    mutable std::mutex mutex_;
     std::fstream file_;
     page_id_t page_count_ = 0;
     std::set<page_id_t> free_pages_;

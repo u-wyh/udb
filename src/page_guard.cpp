@@ -18,6 +18,7 @@ void ReadPageGuard::Take(ReadPageGuard&& other) noexcept {
     pool_ = other.pool_;
     page_id_ = other.page_id_;
     page_ = other.page_;
+    latch_ = std::move(other.latch_);
     other.pool_ = nullptr;
     other.page_id_ = -1;
     other.page_ = nullptr;
@@ -40,6 +41,7 @@ void ReadPageGuard::Drop() {
     pool_ = nullptr;
     page_id_ = -1;
     page_ = nullptr;
+    latch_.unlock();
     pool->UnpinPage(page_id, false);
 }
 
@@ -56,6 +58,7 @@ void WritePageGuard::Take(WritePageGuard&& other) noexcept {
     page_id_ = other.page_id_;
     page_ = other.page_;
     before_image_ = other.before_image_;
+    latch_ = std::move(other.latch_);
     other.pool_ = nullptr;
     other.page_id_ = -1;
     other.page_ = nullptr;
@@ -86,6 +89,8 @@ void WritePageGuard::Drop() {
     page_id_ = -1;
     page_ = nullptr;
     pool->CompleteWrite(page_id, before, *page);
+    latch_.unlock();
+    pool->UnpinPage(page_id, false);
 }
 
 }  // namespace udb

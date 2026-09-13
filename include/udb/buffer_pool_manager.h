@@ -5,7 +5,9 @@
 #include "udb/page_guard.h"
 
 #include <exception>
+#include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -14,8 +16,9 @@ namespace udb {
 
 class Transaction;
 
-// Single-threaded. DiskManager must outlive the pool; access its pages only
-// through this pool while cached. Page pointers remain valid while pinned.
+// DiskManager must outlive the pool; access cached page contents through guards.
+// Page pointers from the compatibility API remain valid while pinned but require
+// caller synchronization when their contents are accessed concurrently.
 // Storage code uses ReadPage/WritePage/NewPageGuard so pin ownership and dirty
 // reporting are scoped. Raw methods remain for low-level tests and compatibility.
 // Flush explicitly before destruction: the destructor does not perform fallible I/O.
@@ -60,6 +63,7 @@ private:
         bool dirty = false;
         bool in_use = false;
         std::optional<lsn_t> page_lsn;
+        mutable std::shared_mutex latch;
     };
 
     std::size_t SelectFrame() const;
@@ -67,6 +71,12 @@ private:
     void WriteBack(std::size_t index);
     void EnsureWalDurable(const Frame& frame);
     Page* Install(std::size_t index, page_id_t page_id, const Page& page);
+    Page* FetchPageLocked(page_id_t page_id);
+    std::pair<page_id_t, Page*> NewPageLocked();
+    void UnpinPageLocked(page_id_t page_id, bool is_dirty);
+    void ThrowIfWriteErrorLocked();
+    bool CanDeletePageLocked(page_id_t page_id) const;
+    bool DeletePageLocked(page_id_t page_id);
 
     DiskManager& disk_;
     LogManager* log_manager_;
@@ -77,6 +87,7 @@ private:
     // All frame indices, least to most recently fetched/created. Bounded O(n)
     // scans keep LRU simple; unpinning does not count as a page access.
     std::vector<std::size_t> lru_;
+    mutable std::mutex mutex_;
 };
 
 }  // namespace udb

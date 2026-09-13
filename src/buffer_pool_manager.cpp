@@ -40,7 +40,7 @@ void BufferPoolManager::Touch(std::size_t index) {
 void BufferPoolManager::WriteBack(std::size_t index) {
     auto& frame = frames_[index];
     if (frame.in_use && frame.dirty) {
-        ThrowIfWriteError();
+        ThrowIfWriteErrorLocked();
         EnsureWalDurable(frame);
         disk_.WritePage(frame.page_id, frame.page);
         frame.dirty = false;
@@ -62,12 +62,23 @@ Page* BufferPoolManager::Install(std::size_t index, page_id_t page_id, const Pag
     if (frame.in_use) {
         page_table_.erase(frame.page_id);
     }
-    frame = Frame{page_id, page, 1, 0, false, true, std::nullopt};
+    frame.page_id = page_id;
+    frame.page = page;
+    frame.pin_count = 1;
+    frame.write_guard_count = 0;
+    frame.dirty = false;
+    frame.in_use = true;
+    frame.page_lsn.reset();
     Touch(index);
     return &frame.page;
 }
 
 Page* BufferPoolManager::FetchPage(page_id_t page_id) {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return FetchPageLocked(page_id);
+}
+
+Page* BufferPoolManager::FetchPageLocked(page_id_t page_id) {
     const auto found = page_table_.find(page_id);
     if (found != page_table_.end()) {
         auto& frame = frames_[found->second];
@@ -86,6 +97,11 @@ Page* BufferPoolManager::FetchPage(page_id_t page_id) {
 }
 
 std::pair<page_id_t, Page*> BufferPoolManager::NewPage() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return NewPageLocked();
+}
+
+std::pair<page_id_t, Page*> BufferPoolManager::NewPageLocked() {
     // Check capacity before allocating: an all-pinned failure must not grow disk.
     const auto index = SelectFrame();
     WriteBack(index);
@@ -114,37 +130,62 @@ std::pair<page_id_t, Page*> BufferPoolManager::NewPage() {
 }
 
 ReadPageGuard BufferPoolManager::ReadPage(page_id_t page_id) {
-    return ReadPageGuard(*this, page_id, FetchPage(page_id));
+    Page* page = nullptr;
+    std::shared_mutex* latch = nullptr;
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        page = FetchPageLocked(page_id);
+        latch = &frames_[page_table_.at(page_id)].latch;
+    }
+    try {
+        std::shared_lock<std::shared_mutex> page_lock(*latch);
+        return ReadPageGuard(*this, page_id, page, std::move(page_lock));
+    } catch (...) {
+        UnpinPage(page_id, false);
+        throw;
+    }
 }
 
 WritePageGuard BufferPoolManager::WritePage(page_id_t page_id) {
-    auto* page = FetchPage(page_id);
-    try {
+    Page* page = nullptr;
+    std::shared_mutex* latch = nullptr;
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        page = FetchPageLocked(page_id);
         auto& frame = frames_[page_table_.at(page_id)];
-        if (frame.write_guard_count != 0) {
-            throw std::logic_error("Page already has a write guard");
-        }
+        ++frame.write_guard_count;
+        latch = &frame.latch;
+    }
+    try {
+        std::unique_lock<std::shared_mutex> page_lock(*latch);
+        const std::lock_guard<std::mutex> lock(mutex_);
         if (active_transaction_ != nullptr &&
             active_transaction_->allocated_pages_.count(page_id) == 0 &&
             active_transaction_->freed_pages_.count(page_id) == 0) {
             active_transaction_->before_images_.emplace(page_id, *page);
         }
-        ++frame.write_guard_count;
+        return WritePageGuard(*this, page_id, page, std::move(page_lock));
     } catch (...) {
-        UnpinPage(page_id, false);
+        const std::lock_guard<std::mutex> lock(mutex_);
+        auto& frame = frames_[page_table_.at(page_id)];
+        --frame.write_guard_count;
+        UnpinPageLocked(page_id, false);
         throw;
     }
-    return WritePageGuard(*this, page_id, page);
 }
 
 WritePageGuard BufferPoolManager::NewPageGuard() {
-    const auto [page_id, page] = NewPage();
-    ++frames_[page_table_.at(page_id)].write_guard_count;
-    return WritePageGuard(*this, page_id, page);
+    const std::lock_guard<std::mutex> lock(mutex_);
+    const auto [page_id, page] = NewPageLocked();
+    auto& frame = frames_[page_table_.at(page_id)];
+    ++frame.write_guard_count;
+    std::unique_lock<std::shared_mutex> page_lock(frame.latch);
+    return WritePageGuard(*this, page_id, page, std::move(page_lock));
 }
 
 void BufferPoolManager::CompleteWrite(page_id_t page_id, const Page& before,
                                       const Page& after) noexcept {
+    const std::lock_guard<std::mutex> lock(mutex_);
     const auto found = page_table_.find(page_id);
     if (found == page_table_.end()) {
         write_error_ = std::make_exception_ptr(std::logic_error("Guard page is not resident"));
@@ -173,11 +214,15 @@ void BufferPoolManager::CompleteWrite(page_id_t page_id, const Page& before,
     } else {
         --frame.write_guard_count;
     }
-    --frame.pin_count;
     frame.dirty = frame.dirty || changed;
 }
 
 void BufferPoolManager::ThrowIfWriteError() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    ThrowIfWriteErrorLocked();
+}
+
+void BufferPoolManager::ThrowIfWriteErrorLocked() {
     if (!write_error_) { return; }
     auto error = write_error_;
     write_error_ = nullptr;
@@ -185,6 +230,11 @@ void BufferPoolManager::ThrowIfWriteError() {
 }
 
 void BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty) {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    UnpinPageLocked(page_id, is_dirty);
+}
+
+void BufferPoolManager::UnpinPageLocked(page_id_t page_id, bool is_dirty) {
     auto& frame = frames_[page_table_.at(page_id)];
     if (frame.pin_count == 0) {
         throw std::logic_error("Page is already unpinned");
@@ -194,23 +244,31 @@ void BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty) {
 }
 
 void BufferPoolManager::FlushPage(page_id_t page_id) {
+    const std::lock_guard<std::mutex> lock(mutex_);
     auto& frame = frames_[page_table_.at(page_id)];
     if (frame.write_guard_count != 0) {
         throw std::logic_error("Cannot flush a page held by a write guard");
     }
-    ThrowIfWriteError();
+    ThrowIfWriteErrorLocked();
     EnsureWalDurable(frame);
     disk_.WritePage(page_id, frame.page);
     frame.dirty = false;
 }
 
 void BufferPoolManager::FlushAllPages() {
+    const std::lock_guard<std::mutex> lock(mutex_);
     for (std::size_t i = 0; i < frames_.size(); ++i) {
+        if (frames_[i].write_guard_count != 0) { continue; }
         WriteBack(i);
     }
 }
 
 bool BufferPoolManager::CanDeletePage(page_id_t page_id) const {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return CanDeletePageLocked(page_id);
+}
+
+bool BufferPoolManager::CanDeletePageLocked(page_id_t page_id) const {
     if (!disk_.IsPageAllocated(page_id)) {
         throw std::out_of_range("Page ID is not allocated");
     }
@@ -219,8 +277,13 @@ bool BufferPoolManager::CanDeletePage(page_id_t page_id) const {
 }
 
 bool BufferPoolManager::DeletePage(page_id_t page_id) {
-    ThrowIfWriteError();
-    if (!CanDeletePage(page_id)) { return false; }
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return DeletePageLocked(page_id);
+}
+
+bool BufferPoolManager::DeletePageLocked(page_id_t page_id) {
+    ThrowIfWriteErrorLocked();
+    if (!CanDeletePageLocked(page_id)) { return false; }
     const auto found = page_table_.find(page_id);
     const auto current_page = found == page_table_.end()
                                 ? disk_.ReadPage(page_id)
@@ -249,12 +312,20 @@ bool BufferPoolManager::DeletePage(page_id_t page_id) {
     const auto index = found->second;
     disk_.DeallocatePage(page_id);
     page_table_.erase(found);
-    frames_[index] = Frame{};
+    auto& frame = frames_[index];
+    frame.page_id = -1;
+    frame.page = Page{};
+    frame.pin_count = 0;
+    frame.write_guard_count = 0;
+    frame.dirty = false;
+    frame.in_use = false;
+    frame.page_lsn.reset();
     Touch(index);
     return true;
 }
 
 void BufferPoolManager::SetActiveTransaction(Transaction* transaction) {
+    const std::lock_guard<std::mutex> lock(mutex_);
     if (transaction != nullptr && !transaction->IsActive()) {
         throw std::logic_error("Buffer pool transaction is not active");
     }
@@ -266,6 +337,7 @@ void BufferPoolManager::SetActiveTransaction(Transaction* transaction) {
 }
 
 void BufferPoolManager::RollbackTransaction(Transaction& transaction) {
+    const std::lock_guard<std::mutex> lock(mutex_);
     if (active_transaction_ != nullptr && active_transaction_ != &transaction) {
         throw std::logic_error("Cannot roll back a different active transaction");
     }
@@ -274,7 +346,7 @@ void BufferPoolManager::RollbackTransaction(Transaction& transaction) {
     if (log_manager_ != nullptr) { log_manager_->Flush(); }
 
     for (const auto page_id : transaction.allocated_pages_) {
-        if (disk_.IsPageAllocated(page_id) && !DeletePage(page_id)) {
+        if (disk_.IsPageAllocated(page_id) && !DeletePageLocked(page_id)) {
             throw std::logic_error("Allocated transaction page is still pinned");
         }
     }

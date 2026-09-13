@@ -440,3 +440,11 @@
 - 测试结果：全新构建无警告，53 / 53 测试及 ASan / UBSan 通过，覆盖 WAL 回收、checkpoint 后尾日志恢复和活动事务屏障，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 54：Thread-safe Storage。
+
+## 阶段 54：Thread-safe Storage
+
+- 做了什么：为 DiskManager、BufferPoolManager 和 Page Guard 增加线程安全的状态保护与页面读写 latch。
+- 关键设计：Buffer Pool 元数据由单一 mutex 保护；每个 frame 使用共享/独占 latch；页面保持 pinned 直到 Guard 释放 latch，避免并发淘汰。
+- 测试结果：全新构建无警告，54 / 54 测试及 ASan / UBSan 通过，并发分配、读写、pin/fetch/flush 压力测试通过，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 55：Concurrent Table/Index。
