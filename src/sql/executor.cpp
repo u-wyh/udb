@@ -195,6 +195,10 @@ public:
     }
     void LockTable(table_id_t id, LockMode mode) {
         if (locks_ == nullptr) { return; }
+        if (mode == LockMode::Shared &&
+            transaction_.GetIsolationLevel() == IsolationLevel::SnapshotIsolation) {
+            return;
+        }
         const bool release = mode == LockMode::Shared &&
             transaction_.GetIsolationLevel() == IsolationLevel::ReadCommitted &&
             transaction_.GetSharedTableLocks().count(id) == 0 &&
@@ -563,6 +567,10 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
             }
             auto* versions = context ? context->GetTransactionManager() : nullptr;
             for (const auto& match : matches) {
+                if (versions) {
+                    versions->CheckWriteConflict(context->GetTransaction(),
+                                                 heap.GetTupleMeta(match.rid));
+                }
                 for (const auto& [index_id, key] : match.keys) {
                     if (!catalog_.GetIndex(index_id).GetTree().Remove(key, match.rid)) {
                         throw std::runtime_error("Index is missing key for deleted tuple");
@@ -658,6 +666,12 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
 
             auto* versions = context ? context->GetTransactionManager() : nullptr;
             std::map<index_id_t, std::map<IndexKey, RID>> proposed_keys;
+            if (versions) {
+                for (const auto& replacement : replacements) {
+                    versions->CheckWriteConflict(context->GetTransaction(),
+                                                 replacement.old_meta);
+                }
+            }
             for (const auto& replacement : replacements) {
                 for (const auto& change : replacement.index_changes) {
                     if (!change.new_key || !catalog_.GetIndex(change.index_id).GetTree().IsUnique()) { continue; }

@@ -153,9 +153,12 @@ void TestConcurrentRecovery(const std::filesystem::path& path) {
         committed_first.ExecuteSQL("BEGIN");
         committed_first.ExecuteSQL("UPDATE left_table SET value = 700 WHERE id = 0");
         committed_first.ExecuteSQL("COMMIT");
-        began_first.ExecuteSQL("UPDATE left_table SET value = 701 WHERE id = 0");
-        began_first.ExecuteSQL("COMMIT");
-        left[0] = 701;
+        bool conflicted = false;
+        try { began_first.ExecuteSQL("UPDATE left_table SET value = 701 WHERE id = 0"); }
+        catch (const WriteConflictError&) { conflicted = true; }
+        Check(conflicted && !began_first.HasActiveTransaction(),
+              "Stale writer did not abort on a first-committer conflict");
+        left[0] = 700;
 
         SqlEngine loser(catalog);
         loser.ExecuteSQL("BEGIN");

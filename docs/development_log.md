@@ -552,3 +552,11 @@
 - 测试结果：全新构建无警告，67 / 67 测试及 ASan / UBSan 通过，覆盖 read-your-own-write、旧 snapshot、commit stamping、DML rollback、索引一致性与重开持久化，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 68：Write Conflict。
+
+## 阶段 68：Write Conflict
+
+- 做了什么：实现 MVCC first-committer 写冲突检测，并保证并发 unique INSERT / UPDATE 失败时表与索引保持一致。
+- 关键设计：Catalog 统一拥有共享 TransactionManager；写入前校验物理 TupleMeta，拒绝覆盖 snapshot 之后提交的版本；Snapshot 读取不持有普通共享表锁。
+- 测试结果：全新构建无警告，68 / 68 测试及 ASan / UBSan 通过，覆盖 lost update、首写者回滚、unique 冲突、逻辑删除冲突与共享版本链，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 69：Version-aware Index。

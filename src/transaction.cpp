@@ -75,6 +75,7 @@ Transaction& TransactionManager::Begin(IsolationLevel isolation_level) {
             log_manager_->Append(LogRecord::Begin(id));
         }
         auto* result = transaction.get();
+        const std::lock_guard<std::mutex> transactions_lock(transactions_mutex_);
         transactions_.emplace(id, std::move(transaction));
         return *result;
     } catch (...) {
@@ -103,6 +104,7 @@ transaction_id_t TransactionManager::DecodeTransactionTimestamp(timestamp_t time
 }
 
 Transaction& TransactionManager::RequireManaged(Transaction& transaction) {
+    const std::lock_guard<std::mutex> lock(transactions_mutex_);
     const auto found = transactions_.find(transaction.GetId());
     if (found == transactions_.end() || found->second.get() != &transaction) {
         throw std::invalid_argument("Transaction is not owned by this manager");
@@ -203,6 +205,19 @@ void TransactionManager::RegisterWrite(Transaction& transaction, RID rid) {
     managed.write_rids_.insert(rid);
 }
 
+void TransactionManager::CheckWriteConflict(Transaction& transaction,
+                                            TupleMeta current_meta) {
+    auto& managed = RequireManaged(transaction);
+    if (!managed.IsActive()) { throw std::logic_error("Transaction is not active"); }
+    if (IsTransactionTimestamp(current_meta.timestamp)) {
+        if (DecodeTransactionTimestamp(current_meta.timestamp) != managed.GetId()) {
+            throw WriteConflictError();
+        }
+        return;
+    }
+    if (current_meta.timestamp > managed.GetReadTimestamp()) { throw WriteConflictError(); }
+}
+
 std::optional<VersionLink> TransactionManager::GetVersionLink(RID rid) const {
     const std::lock_guard<std::mutex> lock(undo_mutex_);
     const auto found = version_links_.find(rid);
@@ -212,6 +227,7 @@ std::optional<VersionLink> TransactionManager::GetVersionLink(RID rid) const {
 
 UndoRecord TransactionManager::GetUndoRecord(VersionLink link) const {
     const std::lock_guard<std::mutex> lock(undo_mutex_);
+    const std::lock_guard<std::mutex> transactions_lock(transactions_mutex_);
     const auto transaction = transactions_.find(link.transaction_id);
     if (transaction == transactions_.end() ||
         link.undo_index >= transaction->second->undo_records_.size()) {
@@ -238,6 +254,7 @@ std::optional<RecordVersion> TransactionManager::ReconstructVersion(
     }
 
     const std::lock_guard<std::mutex> lock(undo_mutex_);
+    const std::lock_guard<std::mutex> transactions_lock(transactions_mutex_);
     const auto head = version_links_.find(rid);
     std::optional<VersionLink> link =
         head == version_links_.end() ? std::nullopt
@@ -283,10 +300,17 @@ void TransactionManager::DiscardUndoRecords(Transaction& transaction) {
     transaction.undo_records_.clear();
 }
 
-Transaction& TransactionManager::GetTransaction(transaction_id_t id) { return *transactions_.at(id); }
-const Transaction& TransactionManager::GetTransaction(transaction_id_t id) const { return *transactions_.at(id); }
+Transaction& TransactionManager::GetTransaction(transaction_id_t id) {
+    const std::lock_guard<std::mutex> lock(transactions_mutex_);
+    return *transactions_.at(id);
+}
+const Transaction& TransactionManager::GetTransaction(transaction_id_t id) const {
+    const std::lock_guard<std::mutex> lock(transactions_mutex_);
+    return *transactions_.at(id);
+}
 
 std::size_t TransactionManager::GetActiveCount() const {
+    const std::lock_guard<std::mutex> lock(transactions_mutex_);
     std::size_t count = 0;
     for (const auto& [id, transaction] : transactions_) {
         static_cast<void>(id);

@@ -5,6 +5,7 @@
 #include "udb/index_metadata.h"
 #include "udb/statistics.h"
 #include "udb/lock_manager.h"
+#include "udb/transaction.h"
 
 #include <map>
 #include <memory>
@@ -18,7 +19,8 @@ namespace udb {
 class Catalog {
 public:
     explicit Catalog(BufferPoolManager& pool, LogManager* log_manager = nullptr)
-        : pool_(pool), log_manager_(log_manager) {}
+        : pool_(pool), log_manager_(log_manager),
+          transaction_manager_(&pool_, log_manager_, &lock_manager_) {}
     Catalog(const Catalog&) = delete;
     Catalog& operator=(const Catalog&) = delete;
 
@@ -40,6 +42,7 @@ public:
     BufferPoolManager& GetBufferPoolManager() { return pool_; }
     LogManager* GetLogManager() const { return log_manager_; }
     LockManager& GetLockManager() { return lock_manager_; }
+    TransactionManager& GetTransactionManager() { return transaction_manager_; }
     const TableStatistics& AnalyzeTable(table_id_t id);
     const TableStatistics& AnalyzeTable(const std::string& name);
     bool HasTableStatistics(table_id_t id) const;
@@ -82,6 +85,7 @@ private:
     BufferPoolManager& pool_;
     LogManager* log_manager_;
     LockManager lock_manager_;
+    TransactionManager transaction_manager_;
     table_id_t next_id_ = 0;
     index_id_t next_index_id_ = 0;
     // One authoritative map avoids partially updated name/ID indexes.

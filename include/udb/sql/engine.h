@@ -14,8 +14,8 @@ public:
     explicit SqlEngine(Catalog& catalog,
                        IsolationLevel default_isolation = IsolationLevel::RepeatableRead)
         : catalog_(catalog), executor_(catalog),
-          transaction_manager_(&catalog.GetBufferPoolManager(), catalog.GetLogManager(),
-                               &catalog.GetLockManager()), default_isolation_(default_isolation) {}
+          transaction_manager_(catalog.GetTransactionManager()),
+          default_isolation_(default_isolation) {}
 
     ExecutionResult ExecuteSQL(std::string_view sql);
     ExecutionResult ExecuteSQL(std::string_view sql, ExecutionContext& context);
@@ -26,7 +26,7 @@ public:
 private:
     Catalog& catalog_;
     Executor executor_;
-    TransactionManager transaction_manager_;
+    TransactionManager& transaction_manager_;
     IsolationLevel default_isolation_;
     Transaction* current_transaction_ = nullptr;
 };

@@ -8,6 +8,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <tuple>
 #include <vector>
 
@@ -28,6 +29,11 @@ using timestamp_t = std::uint64_t;
 
 enum class TransactionState { Active, Committed, Aborted };
 enum class IsolationLevel { ReadCommitted, RepeatableRead, SnapshotIsolation };
+
+class WriteConflictError : public std::runtime_error {
+public:
+    WriteConflictError() : std::runtime_error("Tuple was changed after the transaction snapshot") {}
+};
 
 struct VersionLink {
     transaction_id_t transaction_id;
@@ -127,6 +133,7 @@ public:
     VersionLink AppendUndoRecord(Transaction& transaction, RID rid,
                                  const Record& record, TupleMeta meta);
     void RegisterWrite(Transaction& transaction, RID rid);
+    void CheckWriteConflict(Transaction& transaction, TupleMeta current_meta);
     std::optional<VersionLink> GetVersionLink(RID rid) const;
     UndoRecord GetUndoRecord(VersionLink link) const;
     std::optional<RecordVersion> ReconstructVersion(RID rid, const Record& current,
@@ -144,6 +151,7 @@ private:
     static void UnregisterReadTimestamp(timestamp_t timestamp);
     void DiscardUndoRecords(Transaction& transaction);
     std::map<transaction_id_t, std::unique_ptr<Transaction>> transactions_;
+    mutable std::mutex transactions_mutex_;
     mutable std::mutex undo_mutex_;
     std::map<RID, VersionLink> version_links_;
     BufferPoolManager* pool_;
