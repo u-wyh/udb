@@ -72,6 +72,7 @@ void Verify(Database& database) {
         for (int key = 0; key <= 4; ++key) {
             std::vector<RID> expected;
             for (auto rid = heap.GetFirstRID(); rid; rid = heap.GetNextRID(*rid)) {
+                if (heap.GetTupleMeta(*rid).is_deleted) { continue; }
                 const auto row = Tuple::Deserialize(heap.GetRecord(*rid), schema);
                 const auto& value = row.GetValue(column);
                 if (!value.IsNull() && value.GetInteger() == key) { expected.push_back(*rid); }

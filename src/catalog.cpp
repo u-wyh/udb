@@ -176,6 +176,7 @@ const TableStatistics& Catalog::AnalyzeTable(table_id_t id) {
     statistics.columns.resize(schema.GetColumnCount());
     std::vector<std::vector<Value>> distinct(schema.GetColumnCount());
     for (auto rid = entry.heap.GetFirstRID(); rid; rid = entry.heap.GetNextRID(*rid)) {
+        if (entry.heap.GetTupleMeta(*rid).is_deleted) { continue; }
         const auto tuple = Tuple::Deserialize(entry.heap.GetRecord(*rid), schema);
         ++statistics.row_count;
         for (std::size_t column = 0; column < schema.GetColumnCount(); ++column) {
@@ -257,6 +258,7 @@ const Index& Catalog::CreateIndex(const std::string& name, table_id_t table_id,
     auto tree = BPlusTree::CreateWithHeader(pool_, options);
     auto& heap = table->second->heap;
     for (auto rid = heap.GetFirstRID(); rid; rid = heap.GetNextRID(*rid)) {
+        if (heap.GetTupleMeta(*rid).is_deleted) { continue; }
         const auto tuple = Tuple::Deserialize(heap.GetRecord(*rid), schema);
         const auto key = GetTupleIndexKey(tuple, columns);
         if (!key) { continue; }

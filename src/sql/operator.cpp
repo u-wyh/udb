@@ -73,6 +73,7 @@ std::optional<Tuple> TableScanOperator::Next() {
         current_ = rid;
         started_ = true;
         auto record = heap_.GetRecord(*rid);
+        const auto meta = heap_.GetTupleMeta(*rid);
         if (context_ && context_->GetTransaction().GetIsolationLevel() ==
                             IsolationLevel::SnapshotIsolation) {
             auto* versions = context_->GetTransactionManager();
@@ -80,10 +81,12 @@ std::optional<Tuple> TableScanOperator::Next() {
                 throw std::logic_error("Snapshot scan requires a TransactionManager");
             }
             auto visible = versions->ReconstructVersion(
-                *rid, record, heap_.GetTupleMeta(*rid),
-                context_->GetTransaction().GetReadTimestamp());
+                *rid, record, meta, context_->GetTransaction().GetReadTimestamp(),
+                context_->GetTransaction().GetId());
             if (!visible) { continue; }
             record = std::move(visible->record);
+        } else if (meta.is_deleted) {
+            continue;
         }
         return Tuple::Deserialize(record, schema_);
     }

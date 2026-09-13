@@ -130,6 +130,7 @@ bool Matches(const BoundExpressionPtr& predicate, const Tuple& tuple) {
 std::optional<Tuple> ReadTuple(const TableHeap& heap, RID rid, const Schema& schema,
                                const ExecutionContext* context) {
     auto record = heap.GetRecord(rid);
+    const auto meta = heap.GetTupleMeta(rid);
     if (context && context->GetTransaction().GetIsolationLevel() ==
                        IsolationLevel::SnapshotIsolation) {
         auto* versions = context->GetTransactionManager();
@@ -137,10 +138,12 @@ std::optional<Tuple> ReadTuple(const TableHeap& heap, RID rid, const Schema& sch
             throw std::logic_error("Snapshot read requires a TransactionManager");
         }
         auto visible = versions->ReconstructVersion(
-            rid, record, heap.GetTupleMeta(rid),
-            context->GetTransaction().GetReadTimestamp());
+            rid, record, meta, context->GetTransaction().GetReadTimestamp(),
+            context->GetTransaction().GetId());
         if (!visible) { return std::nullopt; }
         record = std::move(visible->record);
+    } else if (meta.is_deleted) {
+        return std::nullopt;
     }
     return Tuple::Deserialize(record, schema);
 }
@@ -321,12 +324,19 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
                 index_keys.emplace_back(index_id, *key);
             }
             ExecutionResult result{PlanType::Insert};
-            result.inserted_rid = catalog_.GetTableHeap(insert.GetTableId()).InsertRecord(record);
+            auto* versions = context ? context->GetTransactionManager() : nullptr;
+            const auto meta = versions
+                ? TupleMeta{TransactionManager::EncodeTransactionTimestamp(
+                                context->GetTransaction().GetId()), false}
+                : TupleMeta{};
+            result.inserted_rid =
+                catalog_.GetTableHeap(insert.GetTableId()).InsertRecord(record, meta);
             for (const auto& [index_id, key] : index_keys) {
                 if (!catalog_.GetIndex(index_id).GetTree().Insert(key, *result.inserted_rid)) {
                     throw std::runtime_error("Index changed after INSERT uniqueness check");
                 }
             }
+            if (versions) { versions->RegisterWrite(context->GetTransaction(), *result.inserted_rid); }
             result.affected_rows = 1;
             return result;
         }
@@ -532,10 +542,10 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
             std::vector<DeleteMatch> matches;
             const auto table_indexes = catalog_.GetTableIndexes(deletion.GetTableId());
             for (auto rid = heap.GetFirstRID(); rid; rid = heap.GetNextRID(*rid)) {
+                const auto tuple = ReadTuple(heap, *rid, source, context);
+                if (!tuple) { continue; }
                 bool remove = !predicate;
-                std::optional<Tuple> tuple;
                 if (predicate) {
-                    tuple = Tuple::Deserialize(heap.GetRecord(*rid), source);
                     const auto value = EvaluateExpression(*predicate, *tuple);
                     if (value.GetType() != TypeId::BOOLEAN) {
                         throw std::invalid_argument("Predicate did not evaluate to BOOLEAN");
@@ -543,7 +553,6 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
                     remove = !value.IsNull() && value.GetBoolean();
                 }
                 if (!remove) { continue; }
-                if (!tuple) { tuple = Tuple::Deserialize(heap.GetRecord(*rid), source); }
                 DeleteMatch match{*rid, {}};
                 for (const auto index_id : table_indexes) {
                     const auto& index = catalog_.GetIndex(index_id);
@@ -552,13 +561,25 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
                 }
                 matches.push_back(std::move(match));
             }
+            auto* versions = context ? context->GetTransactionManager() : nullptr;
             for (const auto& match : matches) {
                 for (const auto& [index_id, key] : match.keys) {
                     if (!catalog_.GetIndex(index_id).GetTree().Remove(key, match.rid)) {
                         throw std::runtime_error("Index is missing key for deleted tuple");
                     }
                 }
-                heap.DeleteRecord(match.rid);
+                if (versions) {
+                    versions->AppendUndoRecord(context->GetTransaction(), match.rid,
+                                               heap.GetRecord(match.rid),
+                                               heap.GetTupleMeta(match.rid));
+                    heap.SetTupleMeta(
+                        match.rid,
+                        {TransactionManager::EncodeTransactionTimestamp(
+                             context->GetTransaction().GetId()), true});
+                    versions->RegisterWrite(context->GetTransaction(), match.rid);
+                } else {
+                    heap.DeleteRecord(match.rid);
+                }
             }
             ExecutionResult result{PlanType::Delete};
             result.affected_rows = matches.size();
@@ -593,12 +614,16 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
             struct Replacement {
                 RID rid;
                 Record record;
+                Record old_record;
+                TupleMeta old_meta;
                 std::vector<IndexChange> index_changes;
             };
             std::vector<Replacement> replacements;
             const auto table_indexes = catalog_.GetTableIndexes(update.GetTableId());
             for (auto rid = heap.GetFirstRID(); rid; rid = heap.GetNextRID(*rid)) {
-                const auto tuple = Tuple::Deserialize(heap.GetRecord(*rid), source);
+                const auto visible = ReadTuple(heap, *rid, source, context);
+                if (!visible) { continue; }
+                const auto& tuple = *visible;
                 bool match = !predicate;
                 if (predicate) {
                     const auto value = EvaluateExpression(*predicate, tuple);
@@ -615,7 +640,8 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
                     values[assignment.column_index] = assignment.value;
                 }
                 const Tuple replacement(source, std::move(values));
-                Replacement pending{*rid, replacement.Serialize(source), {}};
+                Replacement pending{*rid, replacement.Serialize(source),
+                                    heap.GetRecord(*rid), heap.GetTupleMeta(*rid), {}};
                 for (const auto index_id : table_indexes) {
                     const auto& index = catalog_.GetIndex(index_id);
                     const auto& columns = index.GetMetadata().GetColumnIndexes();
@@ -630,6 +656,7 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
                 replacements.push_back(std::move(pending));
             }
 
+            auto* versions = context ? context->GetTransactionManager() : nullptr;
             std::map<index_id_t, std::map<IndexKey, RID>> proposed_keys;
             for (const auto& replacement : replacements) {
                 for (const auto& change : replacement.index_changes) {
@@ -647,8 +674,20 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
             }
             std::size_t affected = 0;
             for (const auto& replacement : replacements) {
+                if (versions) {
+                    versions->AppendUndoRecord(context->GetTransaction(), replacement.rid,
+                                               replacement.old_record,
+                                               replacement.old_meta);
+                }
                 if (!heap.UpdateRecord(replacement.rid, replacement.record)) {
                     throw std::runtime_error("Updated record does not fit in its current page");
+                }
+                if (versions) {
+                    heap.SetTupleMeta(
+                        replacement.rid,
+                        {TransactionManager::EncodeTransactionTimestamp(
+                             context->GetTransaction().GetId()), false});
+                    versions->RegisterWrite(context->GetTransaction(), replacement.rid);
                 }
                 for (const auto& change : replacement.index_changes) {
                     auto& tree = catalog_.GetIndex(change.index_id).GetTree();

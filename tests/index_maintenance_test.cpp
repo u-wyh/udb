@@ -117,6 +117,7 @@ void ValidateTableIndexes(Catalog& catalog) {
         catalog.GetIndex(index_id).GetTree().Validate();
     }
     for (auto rid = heap.GetFirstRID(); rid; rid = heap.GetNextRID(*rid)) {
+        if (heap.GetTupleMeta(*rid).is_deleted) { continue; }
         const auto tuple = Tuple::Deserialize(heap.GetRecord(*rid), schema);
         for (const auto index_id : catalog.GetTableIndexes(catalog.GetTable("t").GetTableId())) {
             const auto& index = catalog.GetIndex(index_id);

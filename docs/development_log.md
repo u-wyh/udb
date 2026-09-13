@@ -544,3 +544,11 @@
 - 测试结果：全新构建无警告，66 / 66 测试及 ASan / UBSan 通过，覆盖历史更新、future row、tombstone、全部扫描路径和 SQL BEGIN SNAPSHOT，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 67：MVCC DML。
+
+## 阶段 67：MVCC DML
+
+- 做了什么：让 INSERT / UPDATE / DELETE 创建 MVCC 当前版本与 UndoRecord，DELETE 使用逻辑 tombstone，并在提交时盖 commit timestamp。
+- 关键设计：TupleMeta 高位编码未提交 transaction_id；写事务注册 RID 后由 COMMIT 在 durable 前统一盖时间戳；ABORT 复用 full-page rollback 恢复表和索引并撤销 Undo 链。
+- 测试结果：全新构建无警告，67 / 67 测试及 ASan / UBSan 通过，覆盖 read-your-own-write、旧 snapshot、commit stamping、DML rollback、索引一致性与重开持久化，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 68：Write Conflict。

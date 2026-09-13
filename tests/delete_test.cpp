@@ -96,7 +96,11 @@ void TestExecution(const std::filesystem::path& path) {
         auto& heap = catalog.GetTableHeap("t");
         const auto stable = Tuple::Deserialize(heap.GetRecord(rids[3]), catalog.GetTable("t").GetSchema());
         Check(stable.GetValue(0) == Value::Integer(3), "Other RID changed after page compaction");
-        Reject<std::out_of_range>([&] { heap.GetRecord(rids[2]); });
+        Check(heap.GetTupleMeta(rids[2]).is_deleted &&
+                  Tuple::Deserialize(heap.GetRecord(rids[2]),
+                                     catalog.GetTable("t").GetSchema()).GetValue(0) ==
+                      Value::Integer(2),
+              "DELETE did not preserve a logical tombstone at the stable RID");
 
         Check(engine.ExecuteSQL("DELETE FROM t WHERE id = 1").affected_rows == 1, "First live DELETE failed");
         Check(engine.ExecuteSQL("DELETE FROM t WHERE id = 5").affected_rows == 1, "Middle live DELETE failed");

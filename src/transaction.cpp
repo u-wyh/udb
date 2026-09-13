@@ -2,11 +2,16 @@
 #include "udb/buffer_pool_manager.h"
 #include "udb/log_manager.h"
 #include "udb/lock_manager.h"
+#include "udb/slotted_page.h"
 
 #include <limits>
 #include <stdexcept>
 
 namespace udb {
+
+namespace {
+constexpr timestamp_t kTransactionTimestampBit = timestamp_t{1} << 63;
+}
 
 std::atomic<transaction_id_t> TransactionManager::next_id_{0};
 std::mutex TransactionManager::timestamp_mutex_;
@@ -51,7 +56,7 @@ timestamp_t TransactionManager::GetWatermark() {
 Transaction& TransactionManager::Begin(IsolationLevel isolation_level) {
     auto id = next_id_.load();
     while (true) {
-        if (id == std::numeric_limits<transaction_id_t>::max()) {
+        if (id >= kTransactionTimestampBit) {
             throw std::overflow_error("Transaction ID limit reached");
         }
         if (next_id_.compare_exchange_weak(id, id + 1)) { break; }
@@ -79,6 +84,24 @@ Transaction& TransactionManager::Begin(IsolationLevel isolation_level) {
     }
 }
 
+timestamp_t TransactionManager::EncodeTransactionTimestamp(transaction_id_t transaction_id) {
+    if (transaction_id >= kTransactionTimestampBit) {
+        throw std::overflow_error("Transaction ID cannot be encoded as a tuple timestamp");
+    }
+    return kTransactionTimestampBit | transaction_id;
+}
+
+bool TransactionManager::IsTransactionTimestamp(timestamp_t timestamp) {
+    return (timestamp & kTransactionTimestampBit) != 0;
+}
+
+transaction_id_t TransactionManager::DecodeTransactionTimestamp(timestamp_t timestamp) {
+    if (!IsTransactionTimestamp(timestamp)) {
+        throw std::invalid_argument("Tuple timestamp does not encode a transaction ID");
+    }
+    return timestamp & ~kTransactionTimestampBit;
+}
+
 Transaction& TransactionManager::RequireManaged(Transaction& transaction) {
     const auto found = transactions_.find(transaction.GetId());
     if (found == transactions_.end() || found->second.get() != &transaction) {
@@ -94,19 +117,40 @@ void TransactionManager::Commit(Transaction& transaction) {
     if (pool_ != nullptr) { pool_->ThrowIfWriteError(); }
     {
         const std::lock_guard<std::mutex> lock(timestamp_mutex_);
-        if (last_commit_ts_ == std::numeric_limits<timestamp_t>::max()) {
+        if (last_commit_ts_ == kTransactionTimestampBit - 1) {
             throw std::overflow_error("Commit timestamp limit reached");
+        }
+        const auto commit_timestamp = last_commit_ts_ + 1;
+        if (pool_ != nullptr && !managed.write_rids_.empty()) {
+            pool_->SetActiveTransaction(&managed);
+            struct ResetActive {
+                BufferPoolManager& pool;
+                ~ResetActive() { pool.SetActiveTransaction(nullptr); }
+            } reset{*pool_};
+            for (const auto rid : managed.write_rids_) {
+                auto page = pool_->WritePage(rid.page_id);
+                SlottedPage view(page.GetPage(), rid.page_id);
+                const auto meta = view.GetTupleMeta(rid);
+                if (!IsTransactionTimestamp(meta.timestamp) ||
+                    DecodeTransactionTimestamp(meta.timestamp) != managed.GetId()) {
+                    throw std::logic_error("Transaction no longer owns a written tuple version");
+                }
+                view.SetTupleMeta(rid, {commit_timestamp, meta.is_deleted});
+            }
+            pool_->ThrowIfWriteError();
         }
         if (log_manager_ != nullptr) {
             log_manager_->Append(LogRecord::Commit(managed.GetId()));
             log_manager_->Flush();
         }
-        managed.commit_ts_ = ++last_commit_ts_;
+        last_commit_ts_ = commit_timestamp;
+        managed.commit_ts_ = commit_timestamp;
         UnregisterReadTimestamp(managed.read_ts_);
     }
     managed.before_images_.clear();
     managed.allocated_pages_.clear();
     managed.freed_pages_.clear();
+    managed.write_rids_.clear();
     managed.state_ = TransactionState::Committed;
     if (pool_ != nullptr) { pool_->ReleaseTransactionPages(managed); }
     if (lock_manager_ != nullptr) { lock_manager_->UnlockAll(managed); }
@@ -124,6 +168,7 @@ void TransactionManager::Abort(Transaction& transaction,
     managed.before_images_.clear();
     managed.allocated_pages_.clear();
     managed.freed_pages_.clear();
+    managed.write_rids_.clear();
     managed.state_ = TransactionState::Aborted;
     {
         const std::lock_guard<std::mutex> lock(timestamp_mutex_);
@@ -151,6 +196,13 @@ VersionLink TransactionManager::AppendUndoRecord(Transaction& transaction, RID r
     return link;
 }
 
+void TransactionManager::RegisterWrite(Transaction& transaction, RID rid) {
+    auto& managed = RequireManaged(transaction);
+    if (!managed.IsActive()) { throw std::logic_error("Transaction is not active"); }
+    if (rid.page_id < 0) { throw std::invalid_argument("Tuple write requires a valid RID"); }
+    managed.write_rids_.insert(rid);
+}
+
 std::optional<VersionLink> TransactionManager::GetVersionLink(RID rid) const {
     const std::lock_guard<std::mutex> lock(undo_mutex_);
     const auto found = version_links_.find(rid);
@@ -170,11 +222,17 @@ UndoRecord TransactionManager::GetUndoRecord(VersionLink link) const {
 
 std::optional<RecordVersion> TransactionManager::ReconstructVersion(
     RID rid, const Record& current, TupleMeta current_meta,
-    timestamp_t read_timestamp) const {
+    timestamp_t read_timestamp, std::optional<transaction_id_t> reader) const {
     if (rid.page_id < 0) {
         throw std::invalid_argument("Version reconstruction requires a valid RID");
     }
-    if (current_meta.timestamp <= read_timestamp) {
+    const auto visible = [&](TupleMeta meta) {
+        if (IsTransactionTimestamp(meta.timestamp)) {
+            return reader && DecodeTransactionTimestamp(meta.timestamp) == *reader;
+        }
+        return meta.timestamp <= read_timestamp;
+    };
+    if (visible(current_meta)) {
         if (current_meta.is_deleted) { return std::nullopt; }
         return RecordVersion{current, current_meta};
     }
@@ -198,7 +256,7 @@ std::optional<RecordVersion> TransactionManager::ReconstructVersion(
         if (undo.rid != rid) {
             throw std::runtime_error("Undo version chain points to a different RID");
         }
-        if (undo.meta.timestamp <= read_timestamp) {
+        if (visible(undo.meta)) {
             if (undo.meta.is_deleted) { return std::nullopt; }
             return RecordVersion{undo.record, undo.meta};
         }
