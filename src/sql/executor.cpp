@@ -127,6 +127,24 @@ bool Matches(const BoundExpressionPtr& predicate, const Tuple& tuple) {
     return FilterOperator::Matches(predicate, tuple);
 }
 
+std::optional<Tuple> ReadTuple(const TableHeap& heap, RID rid, const Schema& schema,
+                               const ExecutionContext* context) {
+    auto record = heap.GetRecord(rid);
+    if (context && context->GetTransaction().GetIsolationLevel() ==
+                       IsolationLevel::SnapshotIsolation) {
+        auto* versions = context->GetTransactionManager();
+        if (versions == nullptr) {
+            throw std::logic_error("Snapshot read requires a TransactionManager");
+        }
+        auto visible = versions->ReconstructVersion(
+            rid, record, heap.GetTupleMeta(rid),
+            context->GetTransaction().GetReadTimestamp());
+        if (!visible) { return std::nullopt; }
+        record = std::move(visible->record);
+    }
+    return Tuple::Deserialize(record, schema);
+}
+
 bool ReachedLimit(const std::optional<std::size_t>& limit, std::size_t row_count) {
     return limit && row_count >= *limit;
 }
@@ -254,6 +272,10 @@ bool WritesPages(PlanType type) {
 }  // namespace
 
 ExecutionResult Executor::Execute(const PlanNode& plan) {
+    return ExecutePlan(plan, nullptr);
+}
+
+ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* context) {
     switch (plan.GetType()) {
         case PlanType::Begin:
         case PlanType::Commit:
@@ -319,7 +341,8 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             result.output_schema = output;
             if (ReachedLimit(scan.GetLimit(), 0)) { return result; }
             const auto& heap = catalog_.GetTableHeap(scan.GetTableId());
-            auto filter = std::make_unique<FilterOperator>(std::make_unique<TableScanOperator>(heap, source), predicate);
+            auto filter = std::make_unique<FilterOperator>(
+                std::make_unique<TableScanOperator>(heap, source, context), predicate);
             FinishPipeline(result, std::move(filter), output, indexes,
                            scan.GetOrderBy(), scan.GetLimit(), scan.GetOffset(), scan.GetProjections());
             return result;
@@ -339,10 +362,10 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             result.output_schema = output;
             if (ReachedLimit(scan.GetLimit(), 0)) { return result; }
             std::vector<Tuple> tuples;
+            const auto& heap = catalog_.GetTableHeap(scan.GetTableId());
             for (const auto rid : index.GetTree().GetValues(scan.GetKey())) {
-                const auto tuple = Tuple::Deserialize(
-                    catalog_.GetTableHeap(scan.GetTableId()).GetRecord(rid), source);
-                if (Matches(predicate, tuple)) { tuples.push_back(tuple); }
+                const auto tuple = ReadTuple(heap, rid, source, context);
+                if (tuple && Matches(predicate, *tuple)) { tuples.push_back(*tuple); }
             }
             FinishPipeline(result, std::make_unique<MaterializedOperator>(std::move(tuples)), output, indexes,
                        scan.GetOrderBy(), scan.GetLimit(), scan.GetOffset(), scan.GetProjections());
@@ -369,8 +392,8 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             const auto& heap = catalog_.GetTableHeap(scan.GetTableId());
             for (const auto& [key, rid] : entries) {
                 static_cast<void>(key);
-                const auto tuple = Tuple::Deserialize(heap.GetRecord(rid), source);
-                if (Matches(predicate, tuple)) { tuples.push_back(tuple); }
+                const auto tuple = ReadTuple(heap, rid, source, context);
+                if (tuple && Matches(predicate, *tuple)) { tuples.push_back(*tuple); }
             }
             FinishPipeline(result, std::make_unique<MaterializedOperator>(std::move(tuples)), output, indexes,
                        scan.GetOrderBy(), scan.GetLimit(), scan.GetOffset(), scan.GetProjections());
@@ -391,6 +414,34 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             ExecutionResult result{PlanType::IndexOnlyScan};
             result.output_schema = output;
             if (ReachedLimit(scan.GetLimit(), 0)) { return result; }
+            if (context && context->GetTransaction().GetIsolationLevel() ==
+                               IsolationLevel::SnapshotIsolation) {
+                std::vector<std::pair<IndexKey, RID>> entries;
+                if (scan.GetExactKey()) {
+                    for (const auto rid : index.GetTree().GetValues(*scan.GetExactKey())) {
+                        entries.emplace_back(*scan.GetExactKey(), rid);
+                    }
+                } else {
+                    entries = index.GetTree().ScanKeys(
+                        scan.GetLowerBound(), scan.IsLowerInclusive(),
+                        scan.GetUpperBound(), scan.IsUpperInclusive());
+                }
+                std::vector<Tuple> rows;
+                const auto& heap = catalog_.GetTableHeap(scan.GetTableId());
+                for (const auto& [key, rid] : entries) {
+                    static_cast<void>(key);
+                    const auto tuple = ReadTuple(heap, rid, source, context);
+                    if (tuple && Matches(scan.GetPredicate(), *tuple)) {
+                        rows.emplace_back(output,
+                                          std::vector<Value>{tuple->GetValue(columns[0])});
+                    }
+                }
+                auto limited = std::make_unique<LimitOperator>(
+                    std::make_unique<MaterializedOperator>(std::move(rows)),
+                    scan.GetLimit(), scan.GetOffset());
+                result.rows = limited->Execute();
+                return result;
+            }
             std::vector<IndexKey> keys;
             if (scan.GetExactKey()) {
                 keys.assign(index.GetTree().GetValues(*scan.GetExactKey()).size(), *scan.GetExactKey());
@@ -430,8 +481,8 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             result.output_schema = output;
             if (ReachedLimit(join.GetLimit(), 0)) { return result; }
             auto joined = std::make_unique<JoinOperator>(
-                std::make_unique<TableScanOperator>(catalog_.GetTableHeap(join.GetLeftTableId()), left.GetSchema()),
-                std::make_unique<TableScanOperator>(catalog_.GetTableHeap(join.GetRightTableId()), right.GetSchema()),
+                std::make_unique<TableScanOperator>(catalog_.GetTableHeap(join.GetLeftTableId()), left.GetSchema(), context),
+                std::make_unique<TableScanOperator>(catalog_.GetTableHeap(join.GetRightTableId()), right.GetSchema(), context),
                 source, left.GetSchema().GetColumnCount(), join.GetJoinCondition(),
                 plan.GetType() == PlanType::HashJoin ? JoinAlgorithm::Hash : JoinAlgorithm::NestedLoop,
                 join.IsSmallerInputLeft());
@@ -454,7 +505,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
             CheckExpression(aggregate.GetHaving(), output);
             const auto& heap = catalog_.GetTableHeap(aggregate.GetTableId());
             auto filtered = std::make_unique<FilterOperator>(
-                std::make_unique<TableScanOperator>(heap, source), aggregate.GetPredicate());
+                std::make_unique<TableScanOperator>(heap, source, context), aggregate.GetPredicate());
             auto grouped = std::make_unique<AggregateOperator>(std::move(filtered), source, output,
                 specs, group_by, aggregate.ProjectsGroupBy());
             auto having = std::make_unique<FilterOperator>(std::move(grouped), aggregate.GetHaving());
@@ -631,7 +682,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan, ExecutionContext& contex
         bool active;
         ~ActiveTransactionReset() { if (active) { pool.SetActiveTransaction(nullptr); } }
     } reset{pool, writes_pages};
-    auto result = Execute(plan);
+    auto result = ExecutePlan(plan, &context);
     pool.ThrowIfWriteError();
     result.transaction_id = transaction.GetId();
     return result;

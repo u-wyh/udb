@@ -3,6 +3,7 @@
 #include "udb/sql/bound_expression.h"
 #include "udb/sql/plan.h"
 #include "udb/table_heap.h"
+#include "udb/execution_context.h"
 
 #include <unordered_map>
 
@@ -40,12 +41,15 @@ private:
 
 class TableScanOperator final : public ExecutionOperator {
 public:
-    TableScanOperator(const TableHeap& heap, Schema schema) : heap_(heap), schema_(std::move(schema)) {}
+    TableScanOperator(const TableHeap& heap, Schema schema,
+                      const ExecutionContext* context = nullptr)
+        : heap_(heap), schema_(std::move(schema)), context_(context) {}
     void Init() override { current_.reset(); started_ = false; ended_ = false; initialized_ = true; }
     std::optional<Tuple> Next() override;
 private:
     const TableHeap& heap_;
     Schema schema_;
+    const ExecutionContext* context_;
     std::optional<RID> current_;
     bool started_ = false;
     bool ended_ = false;

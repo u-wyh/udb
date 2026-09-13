@@ -536,3 +536,11 @@
 - 测试结果：全新构建无警告，65 / 65 测试及 ASan / UBSan 通过，覆盖当前/历史/二进制版本、删除与重新插入可见性及无历史边界，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 66：Snapshot Reads。
+
+## 阶段 66：Snapshot Reads
+
+- 做了什么：新增 Snapshot Isolation，并让 SeqScan、IndexScan、RangeScan、Join 与 Aggregate 按 transaction read_ts 读取可见版本。
+- 关键设计：ExecutionContext 携带 TransactionManager；TableScan 统一重建版本；MVCC IndexOnlyScan 暂时安全回表校验可见性，snapshot reader 不获取行 S 锁。
+- 测试结果：全新构建无警告，66 / 66 测试及 ASan / UBSan 通过，覆盖历史更新、future row、tombstone、全部扫描路径和 SQL BEGIN SNAPSHOT，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 67：MVCC DML。

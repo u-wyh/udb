@@ -50,7 +50,9 @@ ExecutionResult SqlEngine::ExecuteSQL(std::string_view sql) {
         command == "BEGIN ISOLATION LEVEL READ COMMITTED" ||
         command == "BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED" ||
         command == "BEGIN ISOLATION LEVEL REPEATABLE READ" ||
-        command == "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ") {
+        command == "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ" ||
+        command == "BEGIN ISOLATION LEVEL SNAPSHOT" ||
+        command == "BEGIN TRANSACTION ISOLATION LEVEL SNAPSHOT") {
         if (current_transaction_ != nullptr) {
             throw std::logic_error("A transaction is already active");
         }
@@ -59,6 +61,8 @@ ExecutionResult SqlEngine::ExecuteSQL(std::string_view sql) {
             isolation_level = IsolationLevel::ReadCommitted;
         } else if (command.find("REPEATABLE READ") != std::string::npos) {
             isolation_level = IsolationLevel::RepeatableRead;
+        } else if (command.find("SNAPSHOT") != std::string::npos) {
+            isolation_level = IsolationLevel::SnapshotIsolation;
         }
         current_transaction_ = &transaction_manager_.Begin(isolation_level);
         ExecutionResult result{PlanType::Begin};
@@ -93,7 +97,7 @@ ExecutionResult SqlEngine::ExecuteSQL(std::string_view sql) {
     const bool autocommit = current_transaction_ == nullptr;
     auto* transaction = autocommit ? &transaction_manager_.Begin(default_isolation_)
                                    : current_transaction_;
-    ExecutionContext context(*transaction, catalog_.GetLockManager());
+    ExecutionContext context(*transaction, catalog_.GetLockManager(), transaction_manager_);
     try {
         auto result = executor_.Execute(*plan, context);
         if (autocommit) {

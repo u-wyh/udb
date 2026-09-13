@@ -27,7 +27,7 @@ using transaction_id_t = std::uint64_t;
 using timestamp_t = std::uint64_t;
 
 enum class TransactionState { Active, Committed, Aborted };
-enum class IsolationLevel { ReadCommitted, RepeatableRead };
+enum class IsolationLevel { ReadCommitted, RepeatableRead, SnapshotIsolation };
 
 struct VersionLink {
     transaction_id_t transaction_id;

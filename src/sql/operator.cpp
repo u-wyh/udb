@@ -67,12 +67,26 @@ std::vector<Tuple> ExecutionOperator::Execute() {
 std::optional<Tuple> TableScanOperator::Next() {
     RequireInitialized();
     if (ended_) { return std::nullopt; }
-    const auto rid = started_ ? heap_.GetNextRID(*current_) : heap_.GetFirstRID();
-    if (!rid) { ended_ = true; return std::nullopt; }
-    auto row = Tuple::Deserialize(heap_.GetRecord(*rid), schema_);
-    current_ = rid;
-    started_ = true;
-    return row;
+    while (true) {
+        const auto rid = started_ ? heap_.GetNextRID(*current_) : heap_.GetFirstRID();
+        if (!rid) { ended_ = true; return std::nullopt; }
+        current_ = rid;
+        started_ = true;
+        auto record = heap_.GetRecord(*rid);
+        if (context_ && context_->GetTransaction().GetIsolationLevel() ==
+                            IsolationLevel::SnapshotIsolation) {
+            auto* versions = context_->GetTransactionManager();
+            if (versions == nullptr) {
+                throw std::logic_error("Snapshot scan requires a TransactionManager");
+            }
+            auto visible = versions->ReconstructVersion(
+                *rid, record, heap_.GetTupleMeta(*rid),
+                context_->GetTransaction().GetReadTimestamp());
+            if (!visible) { continue; }
+            record = std::move(visible->record);
+        }
+        return Tuple::Deserialize(record, schema_);
+    }
 }
 
 FilterOperator::FilterOperator(std::unique_ptr<ExecutionOperator> input, BoundExpressionPtr predicate)

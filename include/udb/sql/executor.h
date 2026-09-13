@@ -29,6 +29,7 @@ public:
     ExecutionResult Execute(const PlanNode& plan, ExecutionContext& context);
 
 private:
+    ExecutionResult ExecutePlan(const PlanNode& plan, ExecutionContext* context);
     Catalog& catalog_;
 };
 
