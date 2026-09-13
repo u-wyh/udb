@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <atomic>
+#include <functional>
 #include <map>
 #include <memory>
 #include <set>
@@ -59,11 +60,12 @@ private:
 class TransactionManager {
 public:
     explicit TransactionManager(BufferPoolManager* pool = nullptr,
-                                LogManager* log_manager = nullptr)
-        : pool_(pool), log_manager_(log_manager) {}
+                                LogManager* log_manager = nullptr,
+                                LockManager* lock_manager = nullptr)
+        : pool_(pool), log_manager_(log_manager), lock_manager_(lock_manager) {}
     Transaction& Begin();
     void Commit(Transaction& transaction);
-    void Abort(Transaction& transaction);
+    void Abort(Transaction& transaction, const std::function<void()>& before_unlock = {});
     Transaction& GetTransaction(transaction_id_t id);
     const Transaction& GetTransaction(transaction_id_t id) const;
     std::size_t GetActiveCount() const;
@@ -74,6 +76,7 @@ private:
     std::map<transaction_id_t, std::unique_ptr<Transaction>> transactions_;
     BufferPoolManager* pool_;
     LogManager* log_manager_;
+    LockManager* lock_manager_;
 };
 
 }  // namespace udb

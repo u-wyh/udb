@@ -77,10 +77,12 @@ private:
     void ThrowIfWriteErrorLocked();
     bool CanDeletePageLocked(page_id_t page_id) const;
     bool DeletePageLocked(page_id_t page_id);
+    Transaction* GetActiveTransaction() const;
 
     DiskManager& disk_;
     LogManager* log_manager_;
-    Transaction* active_transaction_ = nullptr;
+    static thread_local std::unordered_map<const BufferPoolManager*, Transaction*>
+        active_transactions_;
     std::exception_ptr write_error_;
     std::vector<Frame> frames_;
     std::unordered_map<page_id_t, std::size_t> page_table_;

@@ -263,6 +263,7 @@ LogManager::LogManager(const std::filesystem::path& path) : path_(path) {
 }
 
 lsn_t LogManager::Append(LogRecord record) {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (next_lsn_ == std::numeric_limits<lsn_t>::max()) {
         throw std::overflow_error("WAL LSN limit reached");
     }
@@ -278,6 +279,7 @@ lsn_t LogManager::Append(LogRecord record) {
 }
 
 void LogManager::Flush() {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     output_.flush();
     if (!output_) { throw std::runtime_error("Cannot flush WAL file"); }
     const auto descriptor = ::open(path_.c_str(), O_RDONLY);
@@ -296,6 +298,7 @@ void LogManager::Flush() {
 }
 
 bool LogManager::HasActiveTransactions() const {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     std::set<transaction_id_t> active;
     for (const auto& record : records_) {
         switch (record.GetType()) {
@@ -316,6 +319,7 @@ bool LogManager::HasActiveTransactions() const {
 }
 
 void LogManager::Reset() {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (HasActiveTransactions()) {
         throw std::logic_error("Cannot reset WAL with an active transaction");
     }
@@ -329,6 +333,16 @@ void LogManager::Reset() {
     next_lsn_ = 0;
     persistent_lsn_.reset();
     Flush();
+}
+
+lsn_t LogManager::GetNextLsn() const {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return next_lsn_;
+}
+
+std::optional<lsn_t> LogManager::GetPersistentLsn() const {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return persistent_lsn_;
 }
 
 }  // namespace udb

@@ -13,7 +13,8 @@ class SqlEngine {
 public:
     explicit SqlEngine(Catalog& catalog)
         : catalog_(catalog), executor_(catalog),
-          transaction_manager_(&catalog.GetBufferPoolManager(), catalog.GetLogManager()) {}
+          transaction_manager_(&catalog.GetBufferPoolManager(), catalog.GetLogManager(),
+                               &catalog.GetLockManager()) {}
 
     ExecutionResult ExecuteSQL(std::string_view sql);
     ExecutionResult ExecuteSQL(std::string_view sql, ExecutionContext& context);

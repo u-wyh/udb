@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <mutex>
 #include <vector>
 
 namespace udb {
@@ -72,8 +73,8 @@ public:
     // Used after a checkpoint has safely persisted data/metadata.
     void Reset();
     const std::vector<LogRecord>& GetRecords() const { return records_; }
-    lsn_t GetNextLsn() const { return next_lsn_; }
-    std::optional<lsn_t> GetPersistentLsn() const { return persistent_lsn_; }
+    lsn_t GetNextLsn() const;
+    std::optional<lsn_t> GetPersistentLsn() const;
     const std::filesystem::path& GetPath() const { return path_; }
 
 private:
@@ -82,6 +83,7 @@ private:
     std::vector<LogRecord> records_;
     lsn_t next_lsn_ = 0;
     std::optional<lsn_t> persistent_lsn_;
+    mutable std::recursive_mutex mutex_;
 };
 
 }  // namespace udb

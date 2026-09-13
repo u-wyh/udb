@@ -160,6 +160,74 @@ void FinishPipeline(ExecutionResult& result, std::unique_ptr<ExecutionOperator> 
     result.rows = projection.Execute();
 }
 
+void AcquireExecutionLocks(const PlanNode& plan, ExecutionContext& context,
+                           Catalog& catalog) {
+    auto* locks = context.GetLockManager();
+    if (locks == nullptr) { return; }
+    auto& transaction = context.GetTransaction();
+    const auto lock_table = [&](table_id_t id, LockMode mode) {
+        locks->LockTable(transaction, mode, id);
+    };
+    switch (plan.GetType()) {
+        case PlanType::Insert:
+            lock_table(dynamic_cast<const InsertPlan&>(plan).GetTableId(), LockMode::Exclusive);
+            return;
+        case PlanType::Delete:
+            lock_table(dynamic_cast<const DeletePlan&>(plan).GetTableId(), LockMode::Exclusive);
+            return;
+        case PlanType::Update:
+            lock_table(dynamic_cast<const UpdatePlan&>(plan).GetTableId(), LockMode::Exclusive);
+            return;
+        case PlanType::SeqScan:
+            lock_table(dynamic_cast<const SeqScanPlan&>(plan).GetTableId(), LockMode::Shared);
+            return;
+        case PlanType::IndexScan:
+            lock_table(dynamic_cast<const IndexScanPlan&>(plan).GetTableId(), LockMode::Shared);
+            return;
+        case PlanType::IndexRangeScan:
+            lock_table(dynamic_cast<const IndexRangeScanPlan&>(plan).GetTableId(), LockMode::Shared);
+            return;
+        case PlanType::IndexOnlyScan:
+            lock_table(dynamic_cast<const IndexOnlyScanPlan&>(plan).GetTableId(), LockMode::Shared);
+            return;
+        case PlanType::Aggregate:
+            lock_table(dynamic_cast<const AggregatePlan&>(plan).GetTableId(), LockMode::Shared);
+            return;
+        case PlanType::CrossJoin:
+        case PlanType::NestedLoopJoin:
+        case PlanType::HashJoin: {
+            const auto& join = dynamic_cast<const JoinPlan&>(plan);
+            const auto first = std::min(join.GetLeftTableId(), join.GetRightTableId());
+            const auto second = std::max(join.GetLeftTableId(), join.GetRightTableId());
+            lock_table(first, LockMode::Shared);
+            if (second != first) { lock_table(second, LockMode::Shared); }
+            return;
+        }
+        case PlanType::CreateIndex:
+            lock_table(dynamic_cast<const CreateIndexPlan&>(plan).GetTableId(), LockMode::Exclusive);
+            return;
+        case PlanType::DropTable:
+            lock_table(dynamic_cast<const DropTablePlan&>(plan).GetTableId(), LockMode::Exclusive);
+            return;
+        case PlanType::DropIndex: {
+            const auto index_id = dynamic_cast<const DropIndexPlan&>(plan).GetIndexId();
+            lock_table(catalog.GetIndex(index_id).GetMetadata().GetTableId(), LockMode::Exclusive);
+            return;
+        }
+        case PlanType::CreateTable:
+        case PlanType::Begin:
+        case PlanType::Commit:
+        case PlanType::Rollback:
+            return;
+    }
+}
+
+bool WritesPages(PlanType type) {
+    return type == PlanType::CreateTable || type == PlanType::CreateIndex ||
+           type == PlanType::DropTable || type == PlanType::DropIndex ||
+           type == PlanType::Insert || type == PlanType::Delete || type == PlanType::Update;
+}
+
 }  // namespace
 
 ExecutionResult Executor::Execute(const PlanNode& plan) {
@@ -530,12 +598,15 @@ ExecutionResult Executor::Execute(const PlanNode& plan) {
 ExecutionResult Executor::Execute(const PlanNode& plan, ExecutionContext& context) {
     auto& transaction = context.GetTransaction();
     if (!transaction.IsActive()) { throw std::logic_error("Execution transaction is not active"); }
+    AcquireExecutionLocks(plan, context, catalog_);
     auto& pool = catalog_.GetBufferPoolManager();
-    pool.SetActiveTransaction(&transaction);
+    const bool writes_pages = WritesPages(plan.GetType());
+    if (writes_pages) { pool.SetActiveTransaction(&transaction); }
     struct ActiveTransactionReset {
         BufferPoolManager& pool;
-        ~ActiveTransactionReset() { pool.SetActiveTransaction(nullptr); }
-    } reset{pool};
+        bool active;
+        ~ActiveTransactionReset() { if (active) { pool.SetActiveTransaction(nullptr); } }
+    } reset{pool, writes_pages};
     auto result = Execute(plan);
     pool.ThrowIfWriteError();
     result.transaction_id = transaction.GetId();

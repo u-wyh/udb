@@ -1,6 +1,7 @@
 #include "udb/transaction.h"
 #include "udb/buffer_pool_manager.h"
 #include "udb/log_manager.h"
+#include "udb/lock_manager.h"
 
 #include <limits>
 #include <stdexcept>
@@ -46,9 +47,11 @@ void TransactionManager::Commit(Transaction& transaction) {
     managed.allocated_pages_.clear();
     managed.freed_pages_.clear();
     managed.state_ = TransactionState::Committed;
+    if (lock_manager_ != nullptr) { lock_manager_->UnlockAll(managed); }
 }
 
-void TransactionManager::Abort(Transaction& transaction) {
+void TransactionManager::Abort(Transaction& transaction,
+                               const std::function<void()>& before_unlock) {
     auto& managed = RequireManaged(transaction);
     if (!managed.IsActive()) { throw std::logic_error("Transaction is not active"); }
     if (pool_ != nullptr) { pool_->RollbackTransaction(managed); }
@@ -60,6 +63,8 @@ void TransactionManager::Abort(Transaction& transaction) {
     managed.allocated_pages_.clear();
     managed.freed_pages_.clear();
     managed.state_ = TransactionState::Aborted;
+    if (before_unlock) { before_unlock(); }
+    if (lock_manager_ != nullptr) { lock_manager_->UnlockAll(managed); }
 }
 
 Transaction& TransactionManager::GetTransaction(transaction_id_t id) { return *transactions_.at(id); }

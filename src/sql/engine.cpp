@@ -67,8 +67,7 @@ ExecutionResult SqlEngine::ExecuteSQL(std::string_view sql) {
     if (command == "ROLLBACK") {
         if (current_transaction_ == nullptr) { throw std::logic_error("No active transaction"); }
         const auto id = current_transaction_->GetId();
-        transaction_manager_.Abort(*current_transaction_);
-        ReloadIndexRoots(catalog_);
+        transaction_manager_.Abort(*current_transaction_, [&] { ReloadIndexRoots(catalog_); });
         current_transaction_ = nullptr;
         ExecutionResult result{PlanType::Rollback};
         result.transaction_id = id;
@@ -83,7 +82,7 @@ ExecutionResult SqlEngine::ExecuteSQL(std::string_view sql) {
     const auto plan = Planner::Plan(bound, catalog_);
     const bool autocommit = current_transaction_ == nullptr;
     auto* transaction = autocommit ? &transaction_manager_.Begin() : current_transaction_;
-    ExecutionContext context(*transaction);
+    ExecutionContext context(*transaction, catalog_.GetLockManager());
     try {
         auto result = executor_.Execute(*plan, context);
         if (autocommit) {
@@ -92,8 +91,7 @@ ExecutionResult SqlEngine::ExecuteSQL(std::string_view sql) {
         }
         return result;
     } catch (...) {
-        transaction_manager_.Abort(*transaction);
-        ReloadIndexRoots(catalog_);
+        transaction_manager_.Abort(*transaction, [&] { ReloadIndexRoots(catalog_); });
         if (!autocommit) { current_transaction_ = nullptr; }
         throw;
     }

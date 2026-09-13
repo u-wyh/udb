@@ -7,6 +7,14 @@
 
 namespace udb {
 
+thread_local std::unordered_map<const BufferPoolManager*, Transaction*>
+    BufferPoolManager::active_transactions_;
+
+Transaction* BufferPoolManager::GetActiveTransaction() const {
+    const auto found = active_transactions_.find(this);
+    return found == active_transactions_.end() ? nullptr : found->second;
+}
+
 BufferPoolManager::BufferPoolManager(DiskManager& disk, std::size_t capacity,
                                      LogManager* log_manager)
     : disk_(disk), log_manager_(log_manager), frames_(capacity), lru_(capacity) {
@@ -107,18 +115,19 @@ std::pair<page_id_t, Page*> BufferPoolManager::NewPageLocked() {
     WriteBack(index);
     const auto expected_page_id = disk_.GetNextPageId();
     std::optional<lsn_t> allocation_lsn;
-    if (active_transaction_ != nullptr && log_manager_ != nullptr) {
+    auto* active_transaction = GetActiveTransaction();
+    if (active_transaction != nullptr && log_manager_ != nullptr) {
         allocation_lsn = log_manager_->Append(
-            LogRecord::PageAllocate(active_transaction_->GetId(), expected_page_id));
+            LogRecord::PageAllocate(active_transaction->GetId(), expected_page_id));
         // AllocatePage zeroes the physical page, so its log must be durable first.
         log_manager_->Flush();
     }
     const auto page_id = disk_.AllocatePage();
     if (page_id != expected_page_id) { throw std::logic_error("Disk page allocation changed unexpectedly"); }
-    if (active_transaction_ != nullptr &&
-        active_transaction_->freed_pages_.count(page_id) == 0) {
+    if (active_transaction != nullptr &&
+        active_transaction->freed_pages_.count(page_id) == 0) {
         try {
-            active_transaction_->allocated_pages_.insert(page_id);
+            active_transaction->allocated_pages_.insert(page_id);
         } catch (...) {
             disk_.DeallocatePage(page_id);
             throw;
@@ -159,10 +168,11 @@ WritePageGuard BufferPoolManager::WritePage(page_id_t page_id) {
     try {
         std::unique_lock<std::shared_mutex> page_lock(*latch);
         const std::lock_guard<std::mutex> lock(mutex_);
-        if (active_transaction_ != nullptr &&
-            active_transaction_->allocated_pages_.count(page_id) == 0 &&
-            active_transaction_->freed_pages_.count(page_id) == 0) {
-            active_transaction_->before_images_.emplace(page_id, *page);
+        auto* active_transaction = GetActiveTransaction();
+        if (active_transaction != nullptr &&
+            active_transaction->allocated_pages_.count(page_id) == 0 &&
+            active_transaction->freed_pages_.count(page_id) == 0) {
+            active_transaction->before_images_.emplace(page_id, *page);
         }
         return WritePageGuard(*this, page_id, page, std::move(page_lock));
     } catch (...) {
@@ -193,10 +203,11 @@ void BufferPoolManager::CompleteWrite(page_id_t page_id, const Page& before,
     }
     auto& frame = frames_[found->second];
     const bool changed = before.data != after.data;
-    if (changed && active_transaction_ != nullptr && log_manager_ != nullptr) {
+    auto* active_transaction = GetActiveTransaction();
+    if (changed && active_transaction != nullptr && log_manager_ != nullptr) {
         try {
             frame.page_lsn = log_manager_->Append(
-                LogRecord::PageWrite(active_transaction_->GetId(), page_id, before, after));
+                LogRecord::PageWrite(active_transaction->GetId(), page_id, before, after));
         } catch (...) {
             if (!write_error_) { write_error_ = std::current_exception(); }
         }
@@ -288,20 +299,21 @@ bool BufferPoolManager::DeletePageLocked(page_id_t page_id) {
     const auto current_page = found == page_table_.end()
                                 ? disk_.ReadPage(page_id)
                                 : frames_[found->second].page;
-    if (active_transaction_ != nullptr && log_manager_ != nullptr) {
-        log_manager_->Append(LogRecord::PageFree(active_transaction_->GetId(),
+    auto* active_transaction = GetActiveTransaction();
+    if (active_transaction != nullptr && log_manager_ != nullptr) {
+        log_manager_->Append(LogRecord::PageFree(active_transaction->GetId(),
                                                  page_id, current_page));
     }
-    if (active_transaction_ != nullptr) {
-        if (active_transaction_->allocated_pages_.erase(page_id) == 0) {
-            auto before = active_transaction_->before_images_.find(page_id);
-            if (before != active_transaction_->before_images_.end()) {
-                active_transaction_->freed_pages_.emplace(page_id, before->second);
-                active_transaction_->before_images_.erase(before);
+    if (active_transaction != nullptr) {
+        if (active_transaction->allocated_pages_.erase(page_id) == 0) {
+            auto before = active_transaction->before_images_.find(page_id);
+            if (before != active_transaction->before_images_.end()) {
+                active_transaction->freed_pages_.emplace(page_id, before->second);
+                active_transaction->before_images_.erase(before);
             } else if (found != page_table_.end()) {
-                active_transaction_->freed_pages_.emplace(page_id, current_page);
+                active_transaction->freed_pages_.emplace(page_id, current_page);
             } else {
-                active_transaction_->freed_pages_.emplace(page_id, current_page);
+                active_transaction->freed_pages_.emplace(page_id, current_page);
             }
         }
     }
@@ -329,19 +341,22 @@ void BufferPoolManager::SetActiveTransaction(Transaction* transaction) {
     if (transaction != nullptr && !transaction->IsActive()) {
         throw std::logic_error("Buffer pool transaction is not active");
     }
-    if (active_transaction_ != nullptr && transaction != nullptr &&
-        active_transaction_ != transaction) {
+    auto* active_transaction = GetActiveTransaction();
+    if (active_transaction != nullptr && transaction != nullptr &&
+        active_transaction != transaction) {
         throw std::logic_error("Another transaction is already using the buffer pool");
     }
-    active_transaction_ = transaction;
+    if (transaction == nullptr) { active_transactions_.erase(this); }
+    else { active_transactions_[this] = transaction; }
 }
 
 void BufferPoolManager::RollbackTransaction(Transaction& transaction) {
     const std::lock_guard<std::mutex> lock(mutex_);
-    if (active_transaction_ != nullptr && active_transaction_ != &transaction) {
+    auto* active_transaction = GetActiveTransaction();
+    if (active_transaction != nullptr && active_transaction != &transaction) {
         throw std::logic_error("Cannot roll back a different active transaction");
     }
-    active_transaction_ = nullptr;
+    active_transactions_.erase(this);
     write_error_ = nullptr;
     if (log_manager_ != nullptr) { log_manager_->Flush(); }
 

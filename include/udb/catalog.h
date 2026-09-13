@@ -4,6 +4,7 @@
 #include "udb/table_metadata.h"
 #include "udb/index_metadata.h"
 #include "udb/statistics.h"
+#include "udb/lock_manager.h"
 
 #include <map>
 #include <memory>
@@ -38,6 +39,7 @@ public:
     std::vector<table_id_t> ListTables() const;  // Ascending ID order; snapshot.
     BufferPoolManager& GetBufferPoolManager() { return pool_; }
     LogManager* GetLogManager() const { return log_manager_; }
+    LockManager& GetLockManager() { return lock_manager_; }
     const TableStatistics& AnalyzeTable(table_id_t id);
     const TableStatistics& AnalyzeTable(const std::string& name);
     bool HasTableStatistics(table_id_t id) const;
@@ -79,6 +81,7 @@ private:
 
     BufferPoolManager& pool_;
     LogManager* log_manager_;
+    LockManager lock_manager_;
     table_id_t next_id_ = 0;
     index_id_t next_index_id_ = 0;
     // One authoritative map avoids partially updated name/ID indexes.

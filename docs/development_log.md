@@ -464,3 +464,11 @@
 - 测试结果：全新构建无警告，56 / 56 测试及 ASan / UBSan 通过，覆盖兼容矩阵、等待唤醒、升级、独立行资源、UnlockAll 与错误边界，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 57：Strict 2PL。
+
+## 阶段 57：Strict 2PL
+
+- 做了什么：将共享 LockManager 接入 SQL 执行链，SELECT/DML 按事务持锁，并在提交或回滚完成后统一释放。
+- 关键设计：第一版采用表级 S/X 锁；多表查询按 table_id 顺序加锁；Buffer Pool 活动事务改为线程局部，COMMIT durable/ROLLBACK 恢复完成后才解锁。
+- 测试结果：全新构建无警告，57 / 57 测试及 ASan / UBSan 通过，覆盖可重复读、脏读阻断、提交/回滚唤醒和不同表并发 DML，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 58：Deadlock。
