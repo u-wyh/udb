@@ -408,3 +408,11 @@
 - 测试结果：全新构建无警告，49 / 49 测试及 ASan / UBSan 通过，覆盖 DML、索引、跨页、allocate/free、约束失败与重开持久性，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 50：WAL Foundation。
+
+## 阶段 50：WAL Foundation
+
+- 做了什么：新增数据库伴生 `.wal`、LogManager、LSN 与六类事务/页面日志记录。
+- 关键设计：日志采用版本化定长帧头与 CRC32；PAGE_WRITE 保存整页 before/after image；LSN 连续分配并支持 fsync 持久化边界。
+- 测试结果：全新构建无警告，50 / 50 测试及 ASan / UBSan 通过，覆盖全类型编解码、重开续写、损坏/截断校验和数据库生命周期，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 51：Write-Ahead Rule。

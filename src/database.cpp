@@ -25,6 +25,12 @@ std::filesystem::path MetadataPath(const std::filesystem::path& path) {
     return result.replace_extension(".meta");
 }
 
+std::filesystem::path WalPath(const std::filesystem::path& path) {
+    static_cast<void>(MetadataPath(path));
+    auto result = path;
+    return result.replace_extension(".wal");
+}
+
 std::filesystem::path TemporaryPath(const std::filesystem::path& path) {
     auto result = path;
     result += ".tmp";
@@ -111,14 +117,16 @@ private:
 
 Database::Database(const std::filesystem::path& path, std::size_t capacity)
     : data_path_(path), metadata_path_(MetadataPath(path)),
+      wal_path_(WalPath(path)), log_manager_(std::make_unique<LogManager>(wal_path_)),
       disk_(std::make_unique<DiskManager>(path)),
       pool_(std::make_unique<BufferPoolManager>(*disk_, capacity)),
       catalog_(std::make_unique<Catalog>(*pool_)) {}
 
 std::unique_ptr<Database> Database::Create(const std::filesystem::path& path, std::size_t capacity) {
     const auto metadata = MetadataPath(path);
+    const auto wal = WalPath(path);
     if (capacity == 0) { throw std::invalid_argument("Buffer pool capacity must be positive"); }
-    if (Exists(path) || Exists(metadata) || Exists(TemporaryPath(metadata))) {
+    if (Exists(path) || Exists(metadata) || Exists(wal) || Exists(TemporaryPath(metadata))) {
         throw std::runtime_error("Database files already exist");
     }
     try {
@@ -129,6 +137,7 @@ std::unique_ptr<Database> Database::Create(const std::filesystem::path& path, st
         // Only the new data path owned by this failed Create is removed.
         std::error_code error;
         std::filesystem::remove(path, error);
+        std::filesystem::remove(wal, error);
         throw;
     }
 }
@@ -150,9 +159,12 @@ void Database::RequireOpen() const {
 
 Catalog& Database::GetCatalog() { RequireOpen(); return *catalog_; }
 const Catalog& Database::GetCatalog() const { RequireOpen(); return *catalog_; }
+LogManager& Database::GetLogManager() { RequireOpen(); return *log_manager_; }
+const LogManager& Database::GetLogManager() const { RequireOpen(); return *log_manager_; }
 
 void Database::Flush() {
     RequireOpen();
+    log_manager_->Flush();
     pool_->FlushAllPages();
     SaveMetadata();
 }
@@ -163,6 +175,7 @@ void Database::Close() {
     catalog_.reset();
     pool_.reset();
     disk_.reset();
+    log_manager_.reset();
 }
 
 void Database::SaveMetadata() const {
