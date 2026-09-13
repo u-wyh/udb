@@ -432,3 +432,11 @@
 - 测试结果：全新构建无警告，52 / 52 测试及 ASan / UBSan 通过，覆盖提交重做、loser 回滚、allocate/free、截断日志与重复恢复，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 53：Checkpoint。
+
+## 阶段 53：Checkpoint
+
+- 做了什么：实现显式 checkpoint，以安全顺序持久化 WAL、数据页和 Catalog 元数据，并回收已完成日志。
+- 关键设计：数据文件和原子替换的 metadata 均执行 durable sync；存在活动事务时拒绝 checkpoint；关闭数据库复用同一 checkpoint 路径。
+- 测试结果：全新构建无警告，53 / 53 测试及 ASan / UBSan 通过，覆盖 WAL 回收、checkpoint 后尾日志恢复和活动事务屏障，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 54：Thread-safe Storage。

@@ -31,6 +31,8 @@ public:
     // malformed files and I/O failures throw std::runtime_error.
     void WritePage(page_id_t page_id, const Page& page);
     Page ReadPage(page_id_t page_id);
+    // Makes all prior data-file writes durable.
+    void Sync();
 
     page_id_t GetPageCount() const { return page_count_; }
     page_id_t GetNextPageId() const {
@@ -49,6 +51,7 @@ private:
     std::streamoff Offset(page_id_t page_id) const;
     void WriteAt(page_id_t page_id, const Page& page);
 
+    std::filesystem::path path_;
     std::fstream file_;
     page_id_t page_count_ = 0;
     std::set<page_id_t> free_pages_;

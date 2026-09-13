@@ -107,6 +107,7 @@ void TestDatabaseWal(const std::filesystem::path& path) {
               database->GetLogManager().GetPath() == wal_path,
               "Database did not create its companion WAL");
         database->GetLogManager().Append(LogRecord::Begin(42));
+        database->GetLogManager().Append(LogRecord::Commit(42));
         database->GetLogManager().Flush();
         database->Close();
     }

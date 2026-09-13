@@ -1,8 +1,11 @@
 #include "udb/disk_manager.h"
 
+#include <cerrno>
+#include <fcntl.h>
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <unistd.h>
 
 namespace udb {
 namespace {
@@ -12,7 +15,7 @@ constexpr auto kMaxPages = std::numeric_limits<std::streamoff>::max() / kPageByt
 
 }  // namespace
 
-DiskManager::DiskManager(const std::filesystem::path& path) {
+DiskManager::DiskManager(const std::filesystem::path& path) : path_(path) {
     if (!std::filesystem::exists(path)) {
         std::ofstream created(path, std::ios::binary | std::ios::app);
         created.close();
@@ -81,6 +84,23 @@ Page DiskManager::ReadPage(page_id_t page_id) {
         throw std::runtime_error("Cannot read complete page");
     }
     return page;
+}
+
+void DiskManager::Sync() {
+    file_.flush();
+    if (!file_) { throw std::runtime_error("Cannot flush database file"); }
+    const auto descriptor = ::open(path_.c_str(), O_RDONLY);
+    if (descriptor < 0) {
+        throw std::runtime_error("Cannot open database for durable sync: " +
+                                 std::to_string(errno));
+    }
+    const auto sync_result = ::fsync(descriptor);
+    const auto sync_error = errno;
+    const auto close_result = ::close(descriptor);
+    if (sync_result != 0 || close_result != 0) {
+        throw std::runtime_error("Cannot durably sync database: " +
+                                 std::to_string(sync_result != 0 ? sync_error : errno));
+    }
 }
 
 bool DiskManager::IsPageAllocated(page_id_t page_id) const {

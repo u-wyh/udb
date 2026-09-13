@@ -22,7 +22,8 @@ public:
     const Catalog& GetCatalog() const;
     LogManager& GetLogManager();
     const LogManager& GetLogManager() const;
-    void Flush();  // Dirty data first, then temp-file metadata replacement; no fsync.
+    void Flush();  // Durably flushes WAL, dirty data, then metadata; retains WAL.
+    void Checkpoint();  // Flushes a transaction-complete state and recycles WAL.
     void Close();  // Idempotent. On failure stays open so caller can retry.
     // References to catalog/tables are invalid after Close/destruction.
 

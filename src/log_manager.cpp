@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <fcntl.h>
 #include <limits>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
@@ -294,7 +295,30 @@ void LogManager::Flush() {
     if (!records_.empty()) { persistent_lsn_ = records_.back().GetLsn(); }
 }
 
+bool LogManager::HasActiveTransactions() const {
+    std::set<transaction_id_t> active;
+    for (const auto& record : records_) {
+        switch (record.GetType()) {
+            case LogRecordType::Begin:
+                active.insert(record.GetTransactionId());
+                break;
+            case LogRecordType::Commit:
+            case LogRecordType::Abort:
+                active.erase(record.GetTransactionId());
+                break;
+            case LogRecordType::PageWrite:
+            case LogRecordType::PageAllocate:
+            case LogRecordType::PageFree:
+                break;
+        }
+    }
+    return !active.empty();
+}
+
 void LogManager::Reset() {
+    if (HasActiveTransactions()) {
+        throw std::logic_error("Cannot reset WAL with an active transaction");
+    }
     Flush();
     output_.close();
     if (!output_) { throw std::runtime_error("Cannot close WAL for reset"); }

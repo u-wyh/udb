@@ -1,8 +1,11 @@
 #include "udb/database.h"
 #include "udb/recovery_manager.h"
 
+#include <cerrno>
+#include <fcntl.h>
 #include <fstream>
 #include <limits>
+#include <unistd.h>
 
 namespace udb {
 namespace {
@@ -40,6 +43,21 @@ std::filesystem::path TemporaryPath(const std::filesystem::path& path) {
 
 bool Exists(const std::filesystem::path& path) {
     return std::filesystem::exists(path) || std::filesystem::is_symlink(path);
+}
+
+void SyncPath(const std::filesystem::path& path, int flags, const char* description) {
+    const auto descriptor = ::open(path.c_str(), flags);
+    if (descriptor < 0) {
+        throw std::runtime_error(std::string("Cannot open ") + description +
+                                 " for durable sync: " + std::to_string(errno));
+    }
+    const auto sync_result = ::fsync(descriptor);
+    const auto sync_error = errno;
+    const auto close_result = ::close(descriptor);
+    if (sync_result != 0 || close_result != 0) {
+        throw std::runtime_error(std::string("Cannot durably sync ") + description +
+                                 ": " + std::to_string(sync_result != 0 ? sync_error : errno));
+    }
 }
 
 void Write(std::vector<unsigned char>& bytes, std::uint64_t value, std::size_t width) {
@@ -169,13 +187,22 @@ void Database::Flush() {
     RequireOpen();
     log_manager_->Flush();
     pool_->FlushAllPages();
+    disk_->Sync();
     SaveMetadata();
+}
+
+void Database::Checkpoint() {
+    RequireOpen();
+    if (log_manager_->HasActiveTransactions()) {
+        throw std::logic_error("Cannot checkpoint with an active transaction");
+    }
+    Flush();
+    log_manager_->Reset();
 }
 
 void Database::Close() {
     if (!catalog_) { return; }
-    Flush();
-    log_manager_->Reset();
+    Checkpoint();
     catalog_.reset();
     pool_.reset();
     disk_.reset();
@@ -232,7 +259,11 @@ void Database::SaveMetadata() const {
         if (!output) { throw std::runtime_error("Cannot write metadata temporary file"); }
         output.close();
         if (!output) { throw std::runtime_error("Cannot close metadata temporary file"); }
+        SyncPath(temporary, O_RDONLY, "metadata temporary file");
         std::filesystem::rename(temporary, metadata_path_);
+        auto parent = metadata_path_.parent_path();
+        if (parent.empty()) { parent = "."; }
+        SyncPath(parent, O_RDONLY | O_DIRECTORY, "metadata directory");
     } catch (...) {
         std::error_code error;
         std::filesystem::remove(temporary, error);
