@@ -704,3 +704,11 @@
 - 测试结果：全新构建无警告，86 / 86 测试及 ASan / UBSan 通过，覆盖事务链、CLR 重开和旧 WAL 兼容，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 87：ARIES Analysis Pass。
+
+## 阶段 87：ARIES Analysis Pass
+
+- 做了什么：实现 restart Analysis，重建 Transaction Table、Dirty Page Table 和 redo 起点。
+- 关键设计：校验 prevLSN 链；分类 winner/loser/completed abort；DPT 保守记录每页最早 recLSN。
+- 测试结果：全新构建无警告，87 / 87 测试及 ASan / UBSan 通过，覆盖交错事务、CLR、重开与分类，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 88：ARIES Redo Pass。

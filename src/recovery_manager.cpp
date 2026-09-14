@@ -65,6 +65,62 @@ void Undo(DiskManager& disk, const LogRecord& record,
 
 }  // namespace
 
+RecoveryAnalysis RecoveryManager::Analyze(const LogManager& log_manager) {
+    RecoveryAnalysis analysis;
+    std::map<transaction_id_t, lsn_t> active_last_lsns;
+    for (const auto& record : log_manager.GetRecords()) {
+        const auto id = record.GetTransactionId();
+        if (record.GetType() == LogRecordType::Begin) {
+            if (active_last_lsns.count(id) != 0) {
+                throw std::runtime_error("Nested WAL transaction ID during Analysis");
+            }
+            active_last_lsns[id] = record.GetLsn();
+            analysis.transaction_table.insert_or_assign(
+                id, RecoveryTransactionEntry{id, RecoveryTransactionState::Running,
+                                             record.GetLsn(), std::nullopt});
+            continue;
+        }
+        const auto active = active_last_lsns.find(id);
+        if (active == active_last_lsns.end()) {
+            throw std::runtime_error("WAL record has no active transaction during Analysis");
+        }
+        if (record.GetPrevLsn() != std::optional<lsn_t>(active->second)) {
+            throw std::runtime_error("Broken WAL transaction chain during Analysis");
+        }
+        active->second = record.GetLsn();
+        auto& transaction = analysis.transaction_table.at(id);
+        transaction.last_lsn = record.GetLsn();
+        if (record.GetPageId()) {
+            analysis.dirty_page_table.emplace(*record.GetPageId(), record.GetLsn());
+        }
+        if (record.GetType() == LogRecordType::Commit) {
+            transaction.state = RecoveryTransactionState::Committed;
+            transaction.commit_timestamp = record.GetCommitTimestamp();
+            analysis.winners.insert(id);
+            if (record.GetCommitTimestamp()) {
+                analysis.maximum_commit_timestamp = std::max(
+                    analysis.maximum_commit_timestamp, *record.GetCommitTimestamp());
+            }
+            active_last_lsns.erase(active);
+        } else if (record.GetType() == LogRecordType::Abort) {
+            transaction.state = RecoveryTransactionState::Aborted;
+            analysis.aborted.insert(id);
+            active_last_lsns.erase(active);
+        }
+    }
+    for (const auto& [id, last_lsn] : active_last_lsns) {
+        static_cast<void>(last_lsn);
+        analysis.losers.insert(id);
+    }
+    if (!analysis.dirty_page_table.empty()) {
+        analysis.redo_start_lsn = std::min_element(
+            analysis.dirty_page_table.begin(), analysis.dirty_page_table.end(),
+            [](const auto& left, const auto& right) { return left.second < right.second; })
+                                      ->second;
+    }
+    return analysis;
+}
+
 std::map<page_id_t, bool> RecoveryManager::Recover(
     DiskManager& disk, LogManager& log_manager) {
     const auto records = log_manager.GetRecords();
