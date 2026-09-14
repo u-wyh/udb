@@ -6,6 +6,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <optional>
 #include <mutex>
 #include <vector>
@@ -18,8 +19,11 @@ enum class LogRecordType : std::uint8_t {
     PageAllocate = 2,
     PageFree = 3,
     Commit = 4,
-    Abort = 5
+    Abort = 5,
+    Compensation = 6
 };
+
+enum class CompensationType : std::uint8_t { PageWrite = 0, PageAllocate = 1, PageFree = 2 };
 
 class LogRecord {
 public:
@@ -32,6 +36,9 @@ public:
     static LogRecord Commit(transaction_id_t transaction_id,
                             std::optional<timestamp_t> commit_timestamp = std::nullopt);
     static LogRecord Abort(transaction_id_t transaction_id);
+    static LogRecord Compensation(transaction_id_t transaction_id, page_id_t page_id,
+                                  CompensationType compensation_type, const Page& after,
+                                  std::optional<lsn_t> undo_next_lsn);
 
     lsn_t GetLsn() const { return lsn_; }
     transaction_id_t GetTransactionId() const { return transaction_id_; }
@@ -40,6 +47,11 @@ public:
     const std::optional<Page>& GetBeforeImage() const { return before_image_; }
     const std::optional<Page>& GetAfterImage() const { return after_image_; }
     std::optional<timestamp_t> GetCommitTimestamp() const { return commit_timestamp_; }
+    std::optional<lsn_t> GetPrevLsn() const { return prev_lsn_; }
+    std::optional<lsn_t> GetUndoNextLsn() const { return undo_next_lsn_; }
+    std::optional<CompensationType> GetCompensationType() const {
+        return compensation_type_;
+    }
     void Validate() const;
 
 private:
@@ -49,10 +61,14 @@ private:
               std::optional<page_id_t> page_id = std::nullopt,
               std::optional<Page> before = std::nullopt,
               std::optional<Page> after = std::nullopt,
-              std::optional<timestamp_t> commit_timestamp = std::nullopt)
+              std::optional<timestamp_t> commit_timestamp = std::nullopt,
+              std::optional<lsn_t> prev_lsn = std::nullopt,
+              std::optional<lsn_t> undo_next_lsn = std::nullopt,
+              std::optional<CompensationType> compensation_type = std::nullopt)
         : transaction_id_(transaction_id), type_(type), page_id_(page_id),
           before_image_(std::move(before)), after_image_(std::move(after)),
-          commit_timestamp_(commit_timestamp) {}
+          commit_timestamp_(commit_timestamp), prev_lsn_(prev_lsn),
+          undo_next_lsn_(undo_next_lsn), compensation_type_(compensation_type) {}
     lsn_t lsn_ = 0;
     transaction_id_t transaction_id_;
     LogRecordType type_;
@@ -60,6 +76,9 @@ private:
     std::optional<Page> before_image_;
     std::optional<Page> after_image_;
     std::optional<timestamp_t> commit_timestamp_;
+    std::optional<lsn_t> prev_lsn_;
+    std::optional<lsn_t> undo_next_lsn_;
+    std::optional<CompensationType> compensation_type_;
 };
 
 // Append-only, single-threaded WAL foundation. Append assigns contiguous LSNs;
@@ -87,6 +106,7 @@ private:
     std::vector<LogRecord> records_;
     lsn_t next_lsn_ = 0;
     std::optional<lsn_t> persistent_lsn_;
+    std::map<transaction_id_t, lsn_t> transaction_last_lsns_;
     mutable std::recursive_mutex mutex_;
 };
 

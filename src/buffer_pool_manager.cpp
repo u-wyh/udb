@@ -121,6 +121,7 @@ std::pair<page_id_t, Page*> BufferPoolManager::NewPageLocked() {
     if (active_transaction != nullptr && log_manager_ != nullptr) {
         allocation_lsn = log_manager_->Append(
             LogRecord::PageAllocate(active_transaction->GetId(), expected_page_id));
+        active_transaction->last_lsn_ = allocation_lsn;
         // AllocatePage zeroes the physical page, so its log must be durable first.
         log_manager_->Flush();
     }
@@ -215,6 +216,7 @@ void BufferPoolManager::CompleteWrite(page_id_t page_id, const Page& before,
         try {
             frame.page_lsn = log_manager_->Append(
                 LogRecord::PageWrite(active_transaction->GetId(), page_id, before, after));
+            active_transaction->last_lsn_ = frame.page_lsn;
         } catch (...) {
             if (!write_error_) { write_error_ = std::current_exception(); }
         }
@@ -313,8 +315,8 @@ bool BufferPoolManager::DeletePageLocked(page_id_t page_id) {
                                 : frames_[found->second].page;
     auto* active_transaction = GetActiveTransaction();
     if (active_transaction != nullptr && log_manager_ != nullptr) {
-        log_manager_->Append(LogRecord::PageFree(active_transaction->GetId(),
-                                                 page_id, current_page));
+        active_transaction->last_lsn_ = log_manager_->Append(
+            LogRecord::PageFree(active_transaction->GetId(), page_id, current_page));
     }
     if (active_transaction != nullptr) {
         if (active_transaction->allocated_pages_.erase(page_id) == 0) {

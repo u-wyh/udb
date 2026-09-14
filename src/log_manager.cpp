@@ -16,9 +16,12 @@ public:
     static LogRecord Make(LogRecordType type, transaction_id_t transaction_id,
                           std::optional<page_id_t> page_id,
                           std::optional<Page> before, std::optional<Page> after,
-                          std::optional<timestamp_t> commit_timestamp, lsn_t lsn) {
+                          std::optional<timestamp_t> commit_timestamp, lsn_t lsn,
+                          std::optional<lsn_t> prev_lsn,
+                          std::optional<lsn_t> undo_next_lsn,
+                          std::optional<CompensationType> compensation_type) {
         LogRecord record(type, transaction_id, page_id, std::move(before), std::move(after),
-                         commit_timestamp);
+                         commit_timestamp, prev_lsn, undo_next_lsn, compensation_type);
         record.lsn_ = lsn;
         return record;
     }
@@ -27,8 +30,11 @@ public:
 namespace {
 
 constexpr std::uint64_t kMagic = 0x31304c4157424455ULL;  // "UDBWAL01"
-constexpr std::uint32_t kVersion = 1;
-constexpr std::size_t kHeaderSize = 48;
+constexpr std::uint32_t kLegacyVersion = 1;
+constexpr std::uint32_t kVersion = 2;
+constexpr std::size_t kLegacyHeaderSize = 48;
+constexpr std::size_t kHeaderSize = 64;
+constexpr std::uint64_t kMissing = std::numeric_limits<std::uint64_t>::max();
 
 void Write(std::vector<unsigned char>& bytes, std::uint64_t value, std::size_t width) {
     for (std::size_t i = 0; i < width; ++i) {
@@ -74,12 +80,15 @@ std::size_t PayloadSize(LogRecordType type) {
         case LogRecordType::Abort: return 0;
         case LogRecordType::PageFree: return PAGE_SIZE;
         case LogRecordType::PageWrite: return 2 * PAGE_SIZE;
+        case LogRecordType::Compensation: return PAGE_SIZE;
     }
     throw std::runtime_error("Unknown WAL record type");
 }
 
-LogRecordType DecodeType(std::uint64_t value) {
-    if (value > static_cast<std::uint64_t>(LogRecordType::Abort)) {
+LogRecordType DecodeType(std::uint64_t value, std::uint32_t version) {
+    const auto maximum = version == kLegacyVersion ? LogRecordType::Abort
+                                                    : LogRecordType::Compensation;
+    if (value > static_cast<std::uint64_t>(maximum)) {
         throw std::runtime_error("Unknown WAL record type");
     }
     return static_cast<LogRecordType>(value);
@@ -94,13 +103,18 @@ std::vector<unsigned char> Encode(const LogRecord& record) {
     Write(bytes, kHeaderSize + PayloadSize(record.GetType()), 4);
     Write(bytes, 0, 4);  // checksum
     Write(bytes, static_cast<std::uint8_t>(record.GetType()), 1);
-    Write(bytes, 0, 3);
+    Write(bytes, record.GetCompensationType()
+                     ? static_cast<std::uint8_t>(*record.GetCompensationType())
+                     : std::numeric_limits<std::uint8_t>::max(), 1);
+    Write(bytes, 0, 2);
     Write(bytes, record.GetLsn(), 8);
     Write(bytes, record.GetTransactionId(), 8);
     Write(bytes, record.GetCommitTimestamp()
                      ? *record.GetCommitTimestamp()
                      : (record.GetPageId() ? static_cast<std::uint64_t>(*record.GetPageId())
-                                           : std::numeric_limits<std::uint64_t>::max()), 8);
+                                           : kMissing), 8);
+    Write(bytes, record.GetPrevLsn().value_or(kMissing), 8);
+    Write(bytes, record.GetUndoNextLsn().value_or(kMissing), 8);
     if (record.GetBeforeImage()) {
         const auto& data = record.GetBeforeImage()->data;
         bytes.insert(bytes.end(), data.begin(), data.end());
@@ -133,14 +147,21 @@ std::vector<LogRecord> Decode(const std::vector<unsigned char>& file,
     std::vector<LogRecord> records;
     std::size_t position = 0;
     lsn_t expected_lsn = 0;
+    std::map<transaction_id_t, lsn_t> transaction_last_lsns;
     while (position < file.size()) {
-        if (file.size() - position < kHeaderSize) { break; }
-        if (Read(file, position, 8) != kMagic || Read(file, position + 8, 4) != kVersion) {
+        if (file.size() - position < 12) { break; }
+        if (Read(file, position, 8) != kMagic) {
             throw std::runtime_error("Invalid WAL record header");
         }
+        const auto version = static_cast<std::uint32_t>(Read(file, position + 8, 4));
+        if (version != kLegacyVersion && version != kVersion) {
+            throw std::runtime_error("Unsupported WAL record version");
+        }
+        const auto header_size = version == kLegacyVersion ? kLegacyHeaderSize : kHeaderSize;
+        if (file.size() - position < header_size) { break; }
         const auto size = Read(file, position + 12, 4);
-        const auto type = DecodeType(Read(file, position + 20, 1));
-        const auto expected_size = kHeaderSize + PayloadSize(type);
+        const auto type = DecodeType(Read(file, position + 20, 1), version);
+        const auto expected_size = header_size + PayloadSize(type);
         if (size != expected_size) { throw std::runtime_error("Invalid WAL record size"); }
         if (size > file.size() - position) { break; }
         std::vector<unsigned char> encoded(file.begin() + static_cast<std::ptrdiff_t>(position),
@@ -156,12 +177,31 @@ std::vector<LogRecord> Decode(const std::vector<unsigned char>& file,
         ++expected_lsn;
         const auto transaction_id = Read(encoded, 32, 8);
         const auto encoded_page_id = Read(encoded, 40, 8);
+        std::optional<lsn_t> prev_lsn;
+        std::optional<lsn_t> undo_next_lsn;
+        std::optional<CompensationType> compensation_type;
+        if (version == kVersion) {
+            const auto encoded_prev = Read(encoded, 48, 8);
+            const auto encoded_undo = Read(encoded, 56, 8);
+            if (encoded_prev != kMissing) { prev_lsn = encoded_prev; }
+            if (encoded_undo != kMissing) { undo_next_lsn = encoded_undo; }
+            if (type == LogRecordType::Compensation) {
+                const auto encoded_compensation = Read(encoded, 21, 1);
+                if (encoded_compensation > static_cast<std::uint64_t>(CompensationType::PageFree)) {
+                    throw std::runtime_error("Invalid WAL compensation type");
+                }
+                compensation_type = static_cast<CompensationType>(encoded_compensation);
+            }
+        } else if (type != LogRecordType::Begin) {
+            const auto previous = transaction_last_lsns.find(transaction_id);
+            if (previous != transaction_last_lsns.end()) { prev_lsn = previous->second; }
+        }
         std::optional<page_id_t> page_id;
         std::optional<timestamp_t> commit_timestamp;
         if (type == LogRecordType::Commit &&
-            encoded_page_id != std::numeric_limits<std::uint64_t>::max()) {
+            encoded_page_id != kMissing) {
             commit_timestamp = encoded_page_id;
-        } else if (encoded_page_id != std::numeric_limits<std::uint64_t>::max()) {
+        } else if (encoded_page_id != kMissing) {
             if (encoded_page_id > static_cast<std::uint64_t>(std::numeric_limits<page_id_t>::max())) {
                 throw std::runtime_error("Invalid WAL page ID");
             }
@@ -169,7 +209,7 @@ std::vector<LogRecord> Decode(const std::vector<unsigned char>& file,
         }
         std::optional<Page> before;
         std::optional<Page> after;
-        std::size_t payload = kHeaderSize;
+        std::size_t payload = header_size;
         if (type == LogRecordType::PageWrite || type == LogRecordType::PageFree) {
             before.emplace();
             std::copy_n(encoded.begin() + static_cast<std::ptrdiff_t>(payload), PAGE_SIZE,
@@ -181,11 +221,24 @@ std::vector<LogRecord> Decode(const std::vector<unsigned char>& file,
             std::copy_n(encoded.begin() + static_cast<std::ptrdiff_t>(payload), PAGE_SIZE,
                         after->data.begin());
         }
+        if (type == LogRecordType::Compensation) {
+            after.emplace();
+            std::copy_n(encoded.begin() + static_cast<std::ptrdiff_t>(payload), PAGE_SIZE,
+                        after->data.begin());
+        }
         auto record = LogRecordDecoder::Make(type, transaction_id, page_id,
                                              std::move(before), std::move(after),
-                                             commit_timestamp, lsn);
+                                             commit_timestamp, lsn, prev_lsn,
+                                             undo_next_lsn, compensation_type);
         record.Validate();
         records.push_back(std::move(record));
+        if (type == LogRecordType::Begin) {
+            transaction_last_lsns[transaction_id] = lsn;
+        } else if (type == LogRecordType::Commit || type == LogRecordType::Abort) {
+            transaction_last_lsns.erase(transaction_id);
+        } else {
+            transaction_last_lsns[transaction_id] = lsn;
+        }
         position += static_cast<std::size_t>(size);
     }
     *valid_size = position;
@@ -216,6 +269,13 @@ LogRecord LogRecord::Commit(transaction_id_t transaction_id,
 LogRecord LogRecord::Abort(transaction_id_t transaction_id) {
     return LogRecord(LogRecordType::Abort, transaction_id);
 }
+LogRecord LogRecord::Compensation(transaction_id_t transaction_id, page_id_t page_id,
+                                  CompensationType compensation_type, const Page& after,
+                                  std::optional<lsn_t> undo_next_lsn) {
+    return LogRecord(LogRecordType::Compensation, transaction_id, page_id,
+                     std::nullopt, after, std::nullopt, std::nullopt,
+                     undo_next_lsn, compensation_type);
+}
 
 void LogRecord::Validate() const {
     const bool has_page = page_id_.has_value();
@@ -226,6 +286,12 @@ void LogRecord::Validate() const {
     }
     if (commit_timestamp_ && (*commit_timestamp_ >> 63U) != 0) {
         throw std::invalid_argument("COMMIT WAL timestamp must be a committed timestamp");
+    }
+    if (undo_next_lsn_ && type_ != LogRecordType::Compensation) {
+        throw std::invalid_argument("Only CLR WAL records carry undoNextLSN");
+    }
+    if (compensation_type_.has_value() != (type_ == LogRecordType::Compensation)) {
+        throw std::invalid_argument("WAL compensation action does not match record type");
     }
     if (has_page && *page_id_ < 0) { throw std::invalid_argument("WAL page ID must be nonnegative"); }
     switch (type_) {
@@ -251,6 +317,11 @@ void LogRecord::Validate() const {
                 throw std::invalid_argument("Invalid PAGE_WRITE WAL record");
             }
             return;
+        case LogRecordType::Compensation:
+            if (!has_page || has_before || !has_after) {
+                throw std::invalid_argument("Invalid CLR WAL record");
+            }
+            return;
     }
     throw std::invalid_argument("Unknown WAL record type");
 }
@@ -273,6 +344,16 @@ LogManager::LogManager(const std::filesystem::path& path) : path_(path) {
     if (valid_size != file.size()) { std::filesystem::resize_file(path, valid_size); }
     next_lsn_ = static_cast<lsn_t>(records_.size());
     if (!records_.empty()) { persistent_lsn_ = records_.back().GetLsn(); }
+    for (const auto& record : records_) {
+        if (record.GetType() == LogRecordType::Begin) {
+            transaction_last_lsns_[record.GetTransactionId()] = record.GetLsn();
+        } else if (record.GetType() == LogRecordType::Commit ||
+                   record.GetType() == LogRecordType::Abort) {
+            transaction_last_lsns_.erase(record.GetTransactionId());
+        } else {
+            transaction_last_lsns_[record.GetTransactionId()] = record.GetLsn();
+        }
+    }
     output_.open(path, std::ios::binary | std::ios::app);
     if (!output_) { throw std::runtime_error("Cannot open WAL file"); }
 }
@@ -282,15 +363,29 @@ lsn_t LogManager::Append(LogRecord record) {
     if (next_lsn_ == std::numeric_limits<lsn_t>::max()) {
         throw std::overflow_error("WAL LSN limit reached");
     }
-    record.Validate();
     record.lsn_ = next_lsn_;
+    if (record.type_ == LogRecordType::Begin) {
+        record.prev_lsn_.reset();
+    } else if (!record.prev_lsn_) {
+        const auto previous = transaction_last_lsns_.find(record.transaction_id_);
+        if (previous != transaction_last_lsns_.end()) { record.prev_lsn_ = previous->second; }
+    }
+    record.Validate();
     const auto encoded = Encode(record);
     records_.reserve(records_.size() + 1);
     output_.write(reinterpret_cast<const char*>(encoded.data()),
                   static_cast<std::streamsize>(encoded.size()));
     if (!output_) { throw std::runtime_error("Cannot append WAL record"); }
     records_.push_back(std::move(record));
-    return next_lsn_++;
+    const auto appended_lsn = next_lsn_++;
+    const auto& appended = records_.back();
+    if (appended.GetType() == LogRecordType::Commit ||
+        appended.GetType() == LogRecordType::Abort) {
+        transaction_last_lsns_.erase(appended.GetTransactionId());
+    } else {
+        transaction_last_lsns_[appended.GetTransactionId()] = appended_lsn;
+    }
+    return appended_lsn;
 }
 
 void LogManager::Flush() {
@@ -327,6 +422,7 @@ bool LogManager::HasActiveTransactions() const {
             case LogRecordType::PageWrite:
             case LogRecordType::PageAllocate:
             case LogRecordType::PageFree:
+            case LogRecordType::Compensation:
                 break;
         }
     }
@@ -345,6 +441,7 @@ void LogManager::Reset() {
     output_.open(path_, std::ios::binary | std::ios::app);
     if (!output_) { throw std::runtime_error("Cannot reopen reset WAL"); }
     records_.clear();
+    transaction_last_lsns_.clear();
     next_lsn_ = 0;
     persistent_lsn_.reset();
     Flush();

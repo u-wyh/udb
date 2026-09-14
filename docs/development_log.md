@@ -696,3 +696,11 @@
 - 测试结果：全新构建无警告，85 / 85 测试及 ASan / UBSan 通过，覆盖持久化、重开、旧库兼容与格式版本校验，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 86：WAL Transaction Chains。
+
+## 阶段 86：WAL Transaction Chains
+
+- 做了什么：WAL v2 增加 prevLSN 事务链、Transaction lastLSN，以及带 undoNextLSN 的 CLR 格式。
+- 关键设计：LogManager 自动维护链；CLR 保留 full-page compensation image；decoder 兼容 v1、v2 和混合 WAL。
+- 测试结果：全新构建无警告，86 / 86 测试及 ASan / UBSan 通过，覆盖事务链、CLR 重开和旧 WAL 兼容，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 87：ARIES Analysis Pass。

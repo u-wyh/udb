@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "udb/page.h"
+#include "udb/lsn.h"
 #include "udb/index_key.h"
 #include "udb/record.h"
 #include "udb/rid.h"
@@ -119,6 +120,7 @@ public:
     IsolationLevel GetIsolationLevel() const { return isolation_level_; }
     timestamp_t GetReadTimestamp() const { return read_ts_; }
     std::optional<timestamp_t> GetCommitTimestamp() const { return commit_ts_; }
+    std::optional<lsn_t> GetLastLsn() const { return last_lsn_; }
     std::size_t GetUndoRecordCount() const { return undo_records_.size(); }
     const std::set<table_id_t>& GetSharedTableLocks() const { return shared_table_locks_; }
     const std::set<table_id_t>& GetExclusiveTableLocks() const { return exclusive_table_locks_; }
@@ -146,6 +148,7 @@ private:
     IsolationLevel isolation_level_;
     timestamp_t read_ts_;
     std::optional<timestamp_t> commit_ts_;
+    std::optional<lsn_t> last_lsn_;
     TransactionState state_ = TransactionState::Active;
     std::atomic<bool> abort_requested_{false};
     std::map<page_id_t, Page> before_images_;

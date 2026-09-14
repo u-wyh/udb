@@ -81,7 +81,7 @@ Transaction& TransactionManager::Begin(IsolationLevel isolation_level) {
         transaction = std::unique_ptr<Transaction>(
             new Transaction(id, isolation_level, read_timestamp));
         if (log_manager_ != nullptr) {
-            log_manager_->Append(LogRecord::Begin(id));
+            transaction->last_lsn_ = log_manager_->Append(LogRecord::Begin(id));
         }
         auto* result = transaction.get();
         const std::lock_guard<std::mutex> transactions_lock(transactions_mutex_);
@@ -162,7 +162,8 @@ void TransactionManager::Commit(Transaction& transaction) {
             pool_->ThrowIfWriteError();
         }
         if (log_manager_ != nullptr) {
-            log_manager_->Append(LogRecord::Commit(managed.GetId(), commit_timestamp));
+            managed.last_lsn_ = log_manager_->Append(
+                LogRecord::Commit(managed.GetId(), commit_timestamp));
             log_manager_->Flush();
         }
         last_commit_ts_ = commit_timestamp;
@@ -186,7 +187,7 @@ void TransactionManager::Abort(Transaction& transaction,
     if (!managed.IsActive()) { throw std::logic_error("Transaction is not active"); }
     if (pool_ != nullptr) { pool_->RollbackTransaction(managed); }
     if (log_manager_ != nullptr) {
-        log_manager_->Append(LogRecord::Abort(managed.GetId()));
+        managed.last_lsn_ = log_manager_->Append(LogRecord::Abort(managed.GetId()));
         log_manager_->Flush();
     }
     managed.before_images_.clear();

@@ -28,6 +28,14 @@ void Redo(DiskManager& disk, const LogRecord& record,
         case LogRecordType::PageFree:
             states[*record.GetPageId()] = false;
             break;
+        case LogRecordType::Compensation:
+            disk.RecoveryWritePage(*record.GetPageId(), *record.GetAfterImage());
+            if (*record.GetCompensationType() == CompensationType::PageAllocate) {
+                states[*record.GetPageId()] = false;
+            } else if (*record.GetCompensationType() == CompensationType::PageFree) {
+                states[*record.GetPageId()] = true;
+            }
+            break;
         case LogRecordType::Begin:
         case LogRecordType::Commit:
         case LogRecordType::Abort: break;
@@ -46,6 +54,8 @@ void Undo(DiskManager& disk, const LogRecord& record,
         case LogRecordType::PageFree:
             disk.RecoveryWritePage(*record.GetPageId(), *record.GetBeforeImage());
             states[*record.GetPageId()] = true;
+            break;
+        case LogRecordType::Compensation:
             break;
         case LogRecordType::Begin:
         case LogRecordType::Commit:
