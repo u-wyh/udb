@@ -680,3 +680,11 @@
 - 测试结果：全新构建无警告，83 / 83 测试及 ASan / UBSan 通过，覆盖长 snapshot、watermark 推进、commit/abort 回收，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 84：Serializable Stress。
+
+## 阶段 84：Serializable Stress
+
+- 做了什么：新增 Serializable + SSI 的多线程、索引、事务、GC 与恢复综合压力测试。
+- 关键设计：重复验证 write skew/phantom 必须 abort；覆盖 point/range/table/composite SIREAD、非阻塞 reader、writer conflict、长 snapshot、deadlock、Vacuum、checkpoint 与 crash/reopen。
+- 测试结果：压力场景额外连续 5 次通过；全新构建无警告，84 / 84 测试及 ASan / UBSan 通过，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：STOP；重新评审 Serializable、WAL 与 SQL 完整性后再制定后续 roadmap。
