@@ -177,6 +177,7 @@ void TransactionManager::Commit(Transaction& transaction) {
     managed.state_ = TransactionState::Committed;
     if (pool_ != nullptr) { pool_->ReleaseTransactionPages(managed); }
     if (lock_manager_ != nullptr) { lock_manager_->UnlockAll(managed); }
+    GarbageCollectSsi();
 }
 
 void TransactionManager::Abort(Transaction& transaction,
@@ -201,6 +202,7 @@ void TransactionManager::Abort(Transaction& transaction,
     DiscardUndoRecords(managed);
     if (pool_ != nullptr) { pool_->ReleaseTransactionPages(managed); }
     if (lock_manager_ != nullptr) { lock_manager_->UnlockAll(managed); }
+    GarbageCollectSsi();
 }
 
 VersionLink TransactionManager::AppendUndoRecord(Transaction& transaction, RID rid,
@@ -417,8 +419,48 @@ std::size_t TransactionManager::GetRetainedSsiTransactionCount() const {
     const std::lock_guard<std::mutex> lock(transactions_mutex_);
     return static_cast<std::size_t>(std::count_if(
         transactions_.begin(), transactions_.end(), [](const auto& entry) {
-            return entry.second->GetIsolationLevel() == IsolationLevel::Serializable;
+            return entry.second->ssi_metadata_retained_;
         }));
+}
+
+std::size_t TransactionManager::GarbageCollectSsi() {
+    const auto watermark = GetWatermark();
+    const std::lock_guard<std::mutex> lock(transactions_mutex_);
+    std::set<transaction_id_t> expired;
+    for (const auto& [id, transaction] : transactions_) {
+        if (!transaction->ssi_metadata_retained_ || transaction->IsActive()) { continue; }
+        if (transaction->GetState() == TransactionState::Aborted ||
+            (transaction->commit_ts_ && *transaction->commit_ts_ <= watermark)) {
+            expired.insert(id);
+        }
+    }
+    if (expired.empty()) { return 0; }
+
+    for (auto read = predicate_sireads_.begin(); read != predicate_sireads_.end();) {
+        if (expired.count(read->reader_id) != 0) { read = predicate_sireads_.erase(read); }
+        else { ++read; }
+    }
+    for (auto read = tuple_sireads_.begin(); read != tuple_sireads_.end();) {
+        for (const auto id : expired) { read->second.erase(id); }
+        if (read->second.empty()) { read = tuple_sireads_.erase(read); }
+        else { ++read; }
+    }
+    for (auto& [id, transaction] : transactions_) {
+        static_cast<void>(id);
+        for (const auto expired_id : expired) {
+            transaction->incoming_rw_dependencies_.erase(expired_id);
+            transaction->outgoing_rw_dependencies_.erase(expired_id);
+        }
+    }
+    for (const auto id : expired) {
+        auto& transaction = *transactions_.at(id);
+        transaction.incoming_rw_dependencies_.clear();
+        transaction.outgoing_rw_dependencies_.clear();
+        transaction.tuple_sireads_.clear();
+        transaction.predicate_sireads_.clear();
+        transaction.ssi_metadata_retained_ = false;
+    }
+    return expired.size();
 }
 
 void TransactionManager::RegisterStaleIndexEntry(Transaction& transaction,

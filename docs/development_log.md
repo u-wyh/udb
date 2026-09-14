@@ -672,3 +672,11 @@
 - 测试结果：全新构建无警告，82 / 82 测试及 ASan / UBSan 通过，覆盖全部扫描路径、DML、非阻塞读取与 SQL write-skew abort，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 83：SSI GC。
+
+## 阶段 83：SSI GC
+
+- 做了什么：实现基于全局 active snapshot watermark 的 SIREAD 与 rw-dependency 元数据回收。
+- 关键设计：保留仍可能与活跃快照冲突的 committed reader；安全事务和 aborted 事务统一清理 tuple/predicate reads 及依赖；Catalog Vacuum 同步触发回收。
+- 测试结果：全新构建无警告，83 / 83 测试及 ASan / UBSan 通过，覆盖长 snapshot、watermark 推进、commit/abort 回收，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 84：Serializable Stress。

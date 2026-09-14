@@ -139,6 +139,7 @@ std::size_t Catalog::Vacuum() {
             }
         }
     }
+    transaction_manager_.GarbageCollectSsi();
     return removed;
 }
 

@@ -140,7 +140,8 @@ private:
     friend class BufferPoolManager;
     friend class LockManager;
     Transaction(transaction_id_t id, IsolationLevel isolation_level, timestamp_t read_ts)
-        : id_(id), isolation_level_(isolation_level), read_ts_(read_ts) {}
+        : id_(id), isolation_level_(isolation_level), read_ts_(read_ts),
+          ssi_metadata_retained_(isolation_level == IsolationLevel::Serializable) {}
     transaction_id_t id_;
     IsolationLevel isolation_level_;
     timestamp_t read_ts_;
@@ -161,6 +162,7 @@ private:
     std::set<transaction_id_t> outgoing_rw_dependencies_;
     std::set<RID> tuple_sireads_;
     std::set<PredicateSiread> predicate_sireads_;
+    bool ssi_metadata_retained_;
 };
 
 class TransactionManager {
@@ -206,6 +208,7 @@ public:
     std::size_t GetRetainedSsiTransactionCount() const;
     std::size_t GetTupleSireadCount() const;
     std::size_t GetPredicateSireadCount() const;
+    std::size_t GarbageCollectSsi();
     void RegisterStaleIndexEntry(Transaction& transaction, std::uint64_t index_id,
                                  const IndexKey& key, RID rid);
     std::vector<std::pair<IndexKey, RID>> GetStaleIndexEntries(
