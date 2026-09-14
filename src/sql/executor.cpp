@@ -128,12 +128,8 @@ bool Matches(const BoundExpressionPtr& predicate, const Tuple& tuple) {
 }
 
 TransactionManager* SnapshotVersions(const ExecutionContext* context) {
-    if (context == nullptr || context->GetTransaction().GetIsolationLevel() ==
-                                  IsolationLevel::RepeatableRead) {
-        return nullptr;
-    }
+    if (context == nullptr) { return nullptr; }
     auto* versions = context->GetTransactionManager();
-    if (versions == nullptr) { throw std::logic_error("Snapshot scan requires a TransactionManager"); }
     return versions;
 }
 
@@ -181,8 +177,7 @@ std::optional<Tuple> ReadTuple(const TableHeap& heap, RID rid, const Schema& sch
                                const ExecutionContext* context) {
     auto record = heap.GetRecord(rid);
     const auto meta = heap.GetTupleMeta(rid);
-    if (context && context->GetTransaction().GetIsolationLevel() !=
-                       IsolationLevel::RepeatableRead) {
+    if (context && context->GetTransactionManager()) {
         auto* versions = context->GetTransactionManager();
         if (versions == nullptr) {
             throw std::logic_error("Snapshot read requires a TransactionManager");
@@ -245,10 +240,7 @@ public:
     }
     void LockTable(table_id_t id, LockMode mode) {
         if (locks_ == nullptr) { return; }
-        if (mode == LockMode::Shared &&
-            transaction_.GetIsolationLevel() != IsolationLevel::RepeatableRead) {
-            return;
-        }
+        if (mode == LockMode::Shared) { return; }
         locks_->LockTable(transaction_, mode, id);
     }
 
@@ -424,7 +416,10 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
             const auto& heap = catalog_.GetTableHeap(scan.GetTableId());
             for (const auto rid : VersionAwareExactLookup(index, scan.GetKey(), context)) {
                 const auto tuple = ReadTuple(heap, rid, source, context);
-                if (tuple && Matches(predicate, *tuple)) { tuples.push_back(*tuple); }
+                if (tuple && GetTupleIndexKey(*tuple, index.GetMetadata().GetColumnIndexes()) ==
+                                 std::optional<IndexKey>(scan.GetKey()) && Matches(predicate, *tuple)) {
+                    tuples.push_back(*tuple);
+                }
             }
             FinishPipeline(result, std::make_unique<MaterializedOperator>(std::move(tuples)), output, indexes,
                        scan.GetOrderBy(), scan.GetLimit(), scan.GetOffset(), scan.GetProjections());
@@ -450,9 +445,11 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
             std::vector<Tuple> tuples;
             const auto& heap = catalog_.GetTableHeap(scan.GetTableId());
             for (const auto& [key, rid] : entries) {
-                static_cast<void>(key);
                 const auto tuple = ReadTuple(heap, rid, source, context);
-                if (tuple && Matches(predicate, *tuple)) { tuples.push_back(*tuple); }
+                if (tuple && GetTupleIndexKey(*tuple, index.GetMetadata().GetColumnIndexes()) ==
+                                 std::optional<IndexKey>(key) && Matches(predicate, *tuple)) {
+                    tuples.push_back(*tuple);
+                }
             }
             FinishPipeline(result, std::make_unique<MaterializedOperator>(std::move(tuples)), output, indexes,
                        scan.GetOrderBy(), scan.GetLimit(), scan.GetOffset(), scan.GetProjections());
@@ -473,8 +470,7 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
             ExecutionResult result{PlanType::IndexOnlyScan};
             result.output_schema = output;
             if (ReachedLimit(scan.GetLimit(), 0)) { return result; }
-            if (context && context->GetTransaction().GetIsolationLevel() !=
-                               IsolationLevel::RepeatableRead) {
+            if (context && context->GetTransactionManager()) {
                 struct CoveringCandidate {
                     IndexKey key;
                     RID rid;
@@ -531,7 +527,9 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
                         continue;
                     }
                     const auto tuple = ReadTuple(heap, entry.rid, source, context);
-                    if (tuple && Matches(scan.GetPredicate(), *tuple)) {
+                    if (tuple && GetTupleIndexKey(*tuple, columns) ==
+                                     std::optional<IndexKey>(entry.key) &&
+                        Matches(scan.GetPredicate(), *tuple)) {
                         rows.emplace_back(output,
                                           std::vector<Value>{tuple->GetValue(columns[0])});
                     }

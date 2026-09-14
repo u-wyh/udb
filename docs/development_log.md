@@ -608,3 +608,11 @@
 - 测试结果：全新构建无警告，74 / 74 测试及 ASan / UBSan 通过，覆盖 non-repeatable read、dirty read 防护、无共享锁及 Seq/Index/Range 路径一致性，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 75：MVCC REPEATABLE READ。
+
+## 阶段 75：MVCC REPEATABLE READ
+
+- 做了什么：让 REPEATABLE READ 在整个 transaction 使用固定 MVCC snapshot，并移除读取共享锁。
+- 关键设计：所有扫描路径统一重建 snapshot 可见版本；stale index candidate 必须与重建后的真实 key 一致；旧 snapshot 写入继续触发 write conflict。
+- 测试结果：全新构建无警告，75 / 75 测试及 ASan / UBSan 通过，覆盖 repeatable read、phantom 隔离、dirty read 防护、索引路径与写冲突，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 76：Snapshot Isolation Semantics。

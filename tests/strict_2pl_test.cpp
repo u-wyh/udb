@@ -23,22 +23,11 @@ void TestRepeatableReadAndCommitRelease(Catalog& catalog) {
     Check(rows.size() == 1 && rows[0].GetValue(0) == Value::Integer(10),
           "Initial repeatable-read value is wrong");
 
-    std::atomic<bool> completed = false;
-    std::atomic<bool> failed = false;
-    std::thread blocked([&] {
-        try {
-            writer.ExecuteSQL("UPDATE t SET value = 20 WHERE id = 1");
-            completed = true;
-        } catch (...) { failed = true; }
-    });
-    std::this_thread::sleep_for(40ms);
-    Check(!completed && !failed, "Writer bypassed a retained SELECT shared lock");
+    writer.ExecuteSQL("UPDATE t SET value = 20 WHERE id = 1");
     rows = reader.ExecuteSQL("SELECT value FROM t WHERE id = 1").rows;
     Check(rows.size() == 1 && rows[0].GetValue(0) == Value::Integer(10),
           "Repeatable read changed inside a transaction");
     reader.ExecuteSQL("COMMIT");
-    blocked.join();
-    Check(completed && !failed, "COMMIT did not release retained locks");
     rows = reader.ExecuteSQL("SELECT value FROM t WHERE id = 1").rows;
     Check(rows[0].GetValue(0) == Value::Integer(20), "Committed writer value is missing");
 }
@@ -49,22 +38,13 @@ void TestWriteLockAndRollbackRelease(Catalog& catalog) {
     writer.ExecuteSQL("BEGIN");
     writer.ExecuteSQL("UPDATE t SET value = 99 WHERE id = 1");
 
-    std::atomic<bool> completed = false;
-    std::atomic<bool> failed = false;
-    std::int32_t observed = -1;
-    std::thread blocked([&] {
-        try {
-            const auto rows = reader.ExecuteSQL("SELECT value FROM t WHERE id = 1").rows;
-            observed = rows.at(0).GetValue(0).GetInteger();
-            completed = true;
-        } catch (...) { failed = true; }
-    });
-    std::this_thread::sleep_for(40ms);
-    Check(!completed && !failed, "Reader observed an uncommitted write");
+    const auto observed = reader.ExecuteSQL("SELECT value FROM t WHERE id = 1")
+                              .rows.at(0).GetValue(0).GetInteger();
+    Check(observed == 20, "Reader observed an uncommitted write");
     writer.ExecuteSQL("ROLLBACK");
-    blocked.join();
-    Check(completed && !failed && observed == 20,
-          "ROLLBACK did not restore data before releasing locks");
+    Check(reader.ExecuteSQL("SELECT value FROM t WHERE id = 1").rows.at(0)
+              .GetValue(0).GetInteger() == 20,
+          "ROLLBACK did not restore data");
 }
 
 void TestIndependentTables(Catalog& catalog) {

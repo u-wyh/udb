@@ -1,27 +1,15 @@
 #include "udb/database.h"
 #include "udb/sql/engine.h"
 
-#include <atomic>
 #include <chrono>
 #include <iostream>
-#include <thread>
 
 namespace {
 using namespace udb;
 using namespace udb::sql;
-using namespace std::chrono_literals;
 
 void Check(bool condition, const char* message) {
     if (!condition) { throw std::runtime_error(message); }
-}
-
-template <typename Predicate>
-void WaitUntil(Predicate predicate, const char* message) {
-    const auto deadline = std::chrono::steady_clock::now() + 2s;
-    while (!predicate()) {
-        if (std::chrono::steady_clock::now() >= deadline) { throw std::runtime_error(message); }
-        std::this_thread::sleep_for(1ms);
-    }
 }
 
 std::int32_t ReadValue(SqlEngine& sql) {
@@ -74,26 +62,13 @@ void TestRepeatableRead(Catalog& catalog) {
     const auto reader_id = reader.ExecuteSQL(
         "BEGIN ISOLATION LEVEL REPEATABLE READ").transaction_id.value();
     Check(ReadValue(reader) == 20, "REPEATABLE READ initial value is wrong");
-
-    std::atomic<bool> completed = false;
-    std::atomic<bool> failed = false;
-    std::thread blocked([&] {
-        try {
-            writer.ExecuteSQL("UPDATE t SET value = 30 WHERE id = 1");
-            completed = true;
-        } catch (...) { failed = true; }
-    });
-    WaitUntil([&] {
-        const auto graph = catalog.GetLockManager().GetWaitsForGraph();
-        const auto found = graph.begin();
-        return found != graph.end() && found->second.count(reader_id) == 1;
-    }, "REPEATABLE READ did not retain its shared lock");
-    Check(ReadValue(reader) == 20 && !completed,
-          "REPEATABLE READ changed before transaction end");
+    writer.ExecuteSQL("UPDATE t SET value = 30 WHERE id = 1");
+    Check(ReadValue(reader) == 20,
+          "REPEATABLE READ changed its fixed snapshot");
+    Check(catalog.GetTransactionManager().GetTransaction(reader_id).GetSharedTableLocks().empty(),
+          "MVCC REPEATABLE READ acquired a shared table lock");
     reader.ExecuteSQL("COMMIT");
-    blocked.join();
-    Check(completed && !failed && ReadValue(reader) == 30,
-          "REPEATABLE READ lock was not released at commit");
+    Check(ReadValue(reader) == 30, "REPEATABLE READ did not observe data after commit");
 }
 
 void TestIsolationConfiguration(Catalog& catalog) {

@@ -74,8 +74,7 @@ std::optional<Tuple> TableScanOperator::Next() {
         started_ = true;
         auto record = heap_.GetRecord(*rid);
         const auto meta = heap_.GetTupleMeta(*rid);
-        if (context_ && context_->GetTransaction().GetIsolationLevel() !=
-                            IsolationLevel::RepeatableRead) {
+        if (context_ && context_->GetTransactionManager()) {
             auto* versions = context_->GetTransactionManager();
             if (versions == nullptr) {
                 throw std::logic_error("Snapshot scan requires a TransactionManager");
