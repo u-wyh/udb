@@ -77,6 +77,23 @@ struct StaleIndexEntry {
     }
 };
 
+struct PredicateSiread {
+    transaction_id_t reader_id;
+    table_id_t table_id;
+    std::optional<std::uint64_t> index_id;
+    std::optional<IndexKey> lower;
+    bool lower_inclusive = true;
+    std::optional<IndexKey> upper;
+    bool upper_inclusive = true;
+
+    friend bool operator<(const PredicateSiread& left, const PredicateSiread& right) {
+        return std::tie(left.reader_id, left.table_id, left.index_id, left.lower,
+                        left.lower_inclusive, left.upper, left.upper_inclusive) <
+               std::tie(right.reader_id, right.table_id, right.index_id, right.lower,
+                        right.lower_inclusive, right.upper, right.upper_inclusive);
+    }
+};
+
 struct RowLockId {
     table_id_t table_id;
     RID rid;
@@ -108,6 +125,9 @@ public:
         return outgoing_rw_dependencies_;
     }
     const std::set<RID>& GetTupleSireads() const { return tuple_sireads_; }
+    const std::set<PredicateSiread>& GetPredicateSireads() const {
+        return predicate_sireads_;
+    }
 
 private:
     friend class TransactionManager;
@@ -134,6 +154,7 @@ private:
     std::set<transaction_id_t> incoming_rw_dependencies_;
     std::set<transaction_id_t> outgoing_rw_dependencies_;
     std::set<RID> tuple_sireads_;
+    std::set<PredicateSiread> predicate_sireads_;
 };
 
 class TransactionManager {
@@ -166,8 +187,17 @@ public:
     void AddRwDependency(Transaction& reader, Transaction& writer);
     void RegisterTupleRead(Transaction& reader, RID rid);
     void RegisterTupleWrite(Transaction& writer, RID rid);
+    void RegisterTableRead(Transaction& reader, table_id_t table_id);
+    void RegisterIndexRead(Transaction& reader, table_id_t table_id,
+                           std::uint64_t index_id, std::optional<IndexKey> lower,
+                           bool lower_inclusive, std::optional<IndexKey> upper,
+                           bool upper_inclusive);
+    void RegisterTableWrite(Transaction& writer, table_id_t table_id);
+    void RegisterIndexWrite(Transaction& writer, table_id_t table_id,
+                            std::uint64_t index_id, const IndexKey& key);
     std::size_t GetRetainedSsiTransactionCount() const;
     std::size_t GetTupleSireadCount() const;
+    std::size_t GetPredicateSireadCount() const;
     void RegisterStaleIndexEntry(Transaction& transaction, std::uint64_t index_id,
                                  const IndexKey& key, RID rid);
     std::vector<std::pair<IndexKey, RID>> GetStaleIndexEntries(
@@ -195,6 +225,7 @@ private:
     std::map<RID, VersionLink> version_links_;
     std::set<StaleIndexEntry> stale_index_entries_;
     std::map<RID, std::set<transaction_id_t>> tuple_sireads_;
+    std::set<PredicateSiread> predicate_sireads_;
     BufferPoolManager* pool_;
     LogManager* log_manager_;
     LockManager* lock_manager_;

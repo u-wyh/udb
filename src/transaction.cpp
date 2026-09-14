@@ -306,6 +306,97 @@ std::size_t TransactionManager::GetTupleSireadCount() const {
     return count;
 }
 
+void TransactionManager::RegisterTableRead(Transaction& reader, table_id_t table_id) {
+    const std::lock_guard<std::mutex> lock(transactions_mutex_);
+    const auto found = transactions_.find(reader.GetId());
+    if (found == transactions_.end() || found->second.get() != &reader ||
+        !reader.IsActive() || reader.GetIsolationLevel() != IsolationLevel::Serializable) {
+        throw std::logic_error("Table SIREAD requires an active SERIALIZABLE transaction");
+    }
+    PredicateSiread read{reader.GetId(), table_id, std::nullopt,
+                         std::nullopt, true, std::nullopt, true};
+    reader.predicate_sireads_.insert(read);
+    predicate_sireads_.insert(std::move(read));
+}
+
+void TransactionManager::RegisterIndexRead(
+    Transaction& reader, table_id_t table_id, std::uint64_t index_id,
+    std::optional<IndexKey> lower, bool lower_inclusive,
+    std::optional<IndexKey> upper, bool upper_inclusive) {
+    if (lower && upper && *upper < *lower) {
+        throw std::invalid_argument("SIREAD index range is reversed");
+    }
+    const std::lock_guard<std::mutex> lock(transactions_mutex_);
+    const auto found = transactions_.find(reader.GetId());
+    if (found == transactions_.end() || found->second.get() != &reader ||
+        !reader.IsActive() || reader.GetIsolationLevel() != IsolationLevel::Serializable) {
+        throw std::logic_error("Predicate SIREAD requires an active SERIALIZABLE transaction");
+    }
+    PredicateSiread read{reader.GetId(), table_id, index_id,
+                         std::move(lower), lower_inclusive,
+                         std::move(upper), upper_inclusive};
+    reader.predicate_sireads_.insert(read);
+    predicate_sireads_.insert(std::move(read));
+}
+
+namespace {
+bool SsiConcurrent(const Transaction& reader, const Transaction& writer) {
+    return reader.IsActive() ||
+           (reader.GetCommitTimestamp() &&
+            *reader.GetCommitTimestamp() > writer.GetReadTimestamp());
+}
+
+bool Contains(const PredicateSiread& read, const IndexKey& key) {
+    if (read.lower && (key < *read.lower ||
+                       (key == *read.lower && !read.lower_inclusive))) { return false; }
+    if (read.upper && (key > *read.upper ||
+                       (key == *read.upper && !read.upper_inclusive))) { return false; }
+    return true;
+}
+}  // namespace
+
+void TransactionManager::RegisterTableWrite(Transaction& writer, table_id_t table_id) {
+    const std::lock_guard<std::mutex> lock(transactions_mutex_);
+    const auto writer_found = transactions_.find(writer.GetId());
+    if (writer_found == transactions_.end() || writer_found->second.get() != &writer) {
+        throw std::invalid_argument("SSI writer is not owned by this manager");
+    }
+    if (!writer.IsActive() || writer.GetIsolationLevel() != IsolationLevel::Serializable) { return; }
+    for (const auto& read : predicate_sireads_) {
+        if (read.table_id != table_id || read.index_id || read.reader_id == writer.GetId()) { continue; }
+        const auto found = transactions_.find(read.reader_id);
+        if (found == transactions_.end() || found->second->GetState() == TransactionState::Aborted ||
+            !SsiConcurrent(*found->second, writer)) { continue; }
+        found->second->outgoing_rw_dependencies_.insert(writer.GetId());
+        writer.incoming_rw_dependencies_.insert(read.reader_id);
+    }
+}
+
+void TransactionManager::RegisterIndexWrite(Transaction& writer, table_id_t table_id,
+                                             std::uint64_t index_id,
+                                             const IndexKey& key) {
+    const std::lock_guard<std::mutex> lock(transactions_mutex_);
+    const auto writer_found = transactions_.find(writer.GetId());
+    if (writer_found == transactions_.end() || writer_found->second.get() != &writer) {
+        throw std::invalid_argument("SSI writer is not owned by this manager");
+    }
+    if (!writer.IsActive() || writer.GetIsolationLevel() != IsolationLevel::Serializable) { return; }
+    for (const auto& read : predicate_sireads_) {
+        if (read.table_id != table_id || read.index_id != index_id ||
+            read.reader_id == writer.GetId() || !Contains(read, key)) { continue; }
+        const auto found = transactions_.find(read.reader_id);
+        if (found == transactions_.end() || found->second->GetState() == TransactionState::Aborted ||
+            !SsiConcurrent(*found->second, writer)) { continue; }
+        found->second->outgoing_rw_dependencies_.insert(writer.GetId());
+        writer.incoming_rw_dependencies_.insert(read.reader_id);
+    }
+}
+
+std::size_t TransactionManager::GetPredicateSireadCount() const {
+    const std::lock_guard<std::mutex> lock(transactions_mutex_);
+    return predicate_sireads_.size();
+}
+
 std::size_t TransactionManager::GetRetainedSsiTransactionCount() const {
     const std::lock_guard<std::mutex> lock(transactions_mutex_);
     return static_cast<std::size_t>(std::count_if(

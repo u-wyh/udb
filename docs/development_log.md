@@ -648,3 +648,11 @@
 - 测试结果：全新构建无警告，79 / 79 测试及 ASan / UBSan 通过，覆盖 active/committed reader、并发判定、去重与隔离级别边界，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 80：Predicate / Range SIREAD。
+
+## 阶段 80：Predicate / Range SIREAD
+
+- 做了什么：实现 Serializable transaction 的表级与索引区间非阻塞 SIREAD，并在写入命中读范围时登记 phantom rw-antidependency。
+- 关键设计：SeqScan 可保守使用表级读；索引读保存开闭区间；只对并发 reader 建立依赖。
+- 测试结果：全新构建无警告，80 / 80 测试及 ASan / UBSan 通过，覆盖表级、范围边界、并发判定与去重，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 81：SSI Dangerous Structure Detection。
