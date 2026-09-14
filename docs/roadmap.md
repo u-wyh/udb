@@ -1,38 +1,50 @@
-# UDB Roadmap v4
+# UDB Roadmap v5
 
-## Serializable Snapshot Isolation
+## ARIES Recovery
 
-- 78. SSI Transaction Core：新增 SERIALIZABLE isolation level；为事务加入 SSI read/write dependency 状态，并允许已提交事务的必要冲突信息暂时存活。
-- 79. Tuple SIREAD：记录 Serializable transaction 对 RID 的非阻塞 SIREAD；writer 修改被其他并发事务读取的 RID 时建立 rw-antidependency。
-- 80. Predicate / Range SIREAD：Index point/range scan 记录 key/range SIREAD；SeqScan 或无法精确描述的 predicate 可保守记录 table-level SIREAD；INSERT/UPDATE/DELETE 检测 phantom rw-conflict。
-- 81. SSI Dangerous Structure Detection：维护必要的 rw dependency，识别可能形成 serialization anomaly 的 dangerous structure；在 commit/冲突阶段选择事务 abort。允许保守 abort，不允许 write skew 错误提交。
-- 82. Serializable SQL Integration：支持 `BEGIN ISOLATION LEVEL SERIALIZABLE`；SeqScan、IndexScan、RangeScan、Join、Aggregate 等执行路径统一注册 SSI reads；DML 注册 writes。
-- 83. SSI GC：利用 transaction 生命周期、commit timestamp 和 watermark 清理不再可能参与冲突的 SIREAD / dependency metadata，避免长期增长。
-- 84. Serializable Stress：综合验证：
-  - write skew 必须至少 abort 一个事务
-  - phantom anomaly 被阻止
-  - point/range/table SIREAD
-  - reader 不阻塞 writer
-  - writer/write conflict
-  - long snapshot
-  - index / composite index
-  - abort/deadlock
+- 85. Durable PageLSN Foundation：为每个数据页建立持久化 ；保持逻辑 /SlottedPage/B+Tree 格式不被强制重写，可使用安全的 sidecar 或等价设计；补齐真正的 WAL-before-data durability / fsync 顺序。
+- 86. WAL Transaction Chains：每条事务日志增加 ；Transaction 维护 ；新增 CLR（Compensation Log Record）和 ，并版本化 WAL 格式。
+- 87. ARIES Analysis Pass：实现 restart Analysis，从 checkpoint/WAL 重建 Transaction Table 和 Dirty Page Table，识别 winner / loser transaction。
+- 88. ARIES Redo Pass：从最小  开始 repeat history；根据 DPT 与持久化 pageLSN 判断是否真正重做 PageWrite / Allocate / Free；redo 必须幂等。
+- 89. ARIES Undo Pass：按最大 LSN 优先逆序 undo loser transaction；每次 undo 写 CLR；支持多个并发 loser；最终写 ABORT/END 等价终止状态。
+- 90. Crash During Recovery：支持在 Undo 中再次 crash；重启后通过 CLR / undoNextLSN 从正确位置继续，不重复撤销已完成动作。
+
+## Checkpoint / Log Lifecycle
+
+- 91. Fuzzy Checkpoint：实现允许活跃事务存在的 checkpoint；记录必要的 Transaction Table / DPT 状态，不再因为 active transaction 拒绝 checkpoint。
+- 92. WAL Truncation：根据 checkpoint、DPT  和活跃事务安全确定最早必需日志；只回收确定不再需要的 WAL，保证 restart recovery 正确。
+
+## Final Recovery Stress
+
+- 93. ARIES + MVCC + SSI Stress：综合测试：
+  - 多并发 committed / loser transaction
+  - 同页不同 RID
+  - page allocation/free
+  - B+ Tree split/merge
+  - MVCC update/delete
+  - SSI abort
+  - fuzzy checkpoint
+  - crash before/after WAL flush
+  - crash during redo
+  - crash during undo
+  - 连续多次 crash/reopen
   - Vacuum
-  - checkpoint
-  - crash/reopen
-  - 多线程重复压力测试
+  - WAL truncation
+  - timestamp 单调
+  - index/table 最终一致性
+  压力场景重复运行并验证 recovery 幂等。
 
 # STOP
 
-完成阶段 84 后停止。
+阶段 93 完成后停止。
 
 不要自行开始：
 
+- Foreign Key / CHECK constraints
 - Transactional DDL
-- Foreign Key / CHECK / UNIQUE constraint framework
-- ARIES WAL 重构
 - Distributed transaction
 - Replication
 - Vector Index
+- Buffer Pool 性能重构
 
-阶段 84 后重新评审 Serializable、WAL 和 SQL 完整性，再制定下一版 roadmap。
+阶段 93 后重新评审 SQL 完整性、存储性能与后续高级功能路线。
