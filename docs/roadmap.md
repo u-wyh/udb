@@ -1,54 +1,38 @@
-# UDB Roadmap v3
+# UDB Roadmap v4
 
-## MVCC 前正确性地基
+## Serializable Snapshot Isolation
 
-- 61. Same-page Transaction Safety：补齐两个事务修改同一物理页不同 RID 时的 abort/crash 测试；保证现有 full-page WAL / rollback 不会互相覆盖。必要时增加 transaction-lifetime page write ownership。
-- 62. MVCC Timestamp Core：Transaction 增加 `read_ts / commit_ts`，实现全局 commit timestamp 和 active transaction watermark。
-
-## Version Storage
-
-- 63. TupleMeta：为 RID 对应的物理 tuple 增加独立 `TupleMeta{timestamp, is_deleted}`；不得污染 Tuple/Record 逻辑格式；持久化格式版本化并处理现有数据库兼容。
-- 64. Undo Version Chain：实现 transaction-owned UndoRecord 和 RID → VersionLink；旧版本保存完整旧 Record + TupleMeta。
-- 65. Version Reconstruction：给定 transaction snapshot，从当前 tuple 沿 undo chain 重建其可见版本。
-
-## Snapshot Isolation
-
-- 66. Snapshot Reads：新增 Snapshot Isolation；SELECT/TableScan/IndexScan 根据 `read_ts` 做 MVCC visibility；snapshot reader 不获取普通行 S 锁。
-- 67. MVCC DML：INSERT / UPDATE / DELETE 创建版本；DELETE 使用 logical tombstone；支持 read-your-own-write、commit stamping、abort undo。
-- 68. Write Conflict：实现 first-writer/first-committer 冲突检测，阻止 lost update，并保证 unique constraint 在并发版本下正确。
-
-## Index + MVCC
-
-- 69. Version-aware Index：indexed column 更新/删除时保留旧 snapshot 必需的 index entry；查询后做 version visibility/residual validation；兼容 non-unique/composite/VARCHAR index。
-- 70. MVCC Index-only Scan：只有能够证明目标版本可见且 index entry 足够新时使用 covering result，否则安全回退 tuple lookup。
-
-## GC / Persistence
-
-- 71. Vacuum + Watermark：依据 oldest active snapshot 清理不可再见 UndoRecord、logical tombstone 和 stale index entries；物理删除后 RID 仍不得错误复用。
-- 72. MVCC WAL / Recovery：验证 tuple meta、current version、commit timestamp 与 logical delete 在 crash recovery 后正确；恢复后无需保留已死亡 snapshot 的历史链。
-- 73. MVCC Checkpoint / Reopen：checkpoint、vacuum、WAL 回收及 reopen 后 timestamp 单调性与索引一致性。
-
-## Isolation Integration
-
-- 74. MVCC READ COMMITTED：每条 statement 获取新 snapshot，实现 RC 的 non-repeatable read 语义，不依赖读取 S 锁。
-- 75. MVCC REPEATABLE READ：整个 transaction 固定 snapshot；保留现有写冲突保护，验证 repeatable read 与 phantom 行为。
-- 76. Snapshot Isolation Semantics：完整验证 dirty read、lost update、read-your-writes、delete/update visibility，并明确测试 SI 允许的 write-skew。
-
-## Final Stress
-
-- 77. MVCC Concurrent Stress：多 reader/writer、多个 index、长事务、vacuum、abort、deadlock、checkpoint、crash/reopen 综合压力测试，并连续重复运行。
+- 78. SSI Transaction Core：新增 SERIALIZABLE isolation level；为事务加入 SSI read/write dependency 状态，并允许已提交事务的必要冲突信息暂时存活。
+- 79. Tuple SIREAD：记录 Serializable transaction 对 RID 的非阻塞 SIREAD；writer 修改被其他并发事务读取的 RID 时建立 rw-antidependency。
+- 80. Predicate / Range SIREAD：Index point/range scan 记录 key/range SIREAD；SeqScan 或无法精确描述的 predicate 可保守记录 table-level SIREAD；INSERT/UPDATE/DELETE 检测 phantom rw-conflict。
+- 81. SSI Dangerous Structure Detection：维护必要的 rw dependency，识别可能形成 serialization anomaly 的 dangerous structure；在 commit/冲突阶段选择事务 abort。允许保守 abort，不允许 write skew 错误提交。
+- 82. Serializable SQL Integration：支持 ；SeqScan、IndexScan、RangeScan、Join、Aggregate 等执行路径统一注册 SSI reads；DML 注册 writes。
+- 83. SSI GC：利用 transaction 生命周期、commit timestamp 和 watermark 清理不再可能参与冲突的 SIREAD / dependency metadata，避免长期增长。
+- 84. Serializable Stress：综合验证：
+  - write skew 必须至少 abort 一个事务
+  - phantom anomaly 被阻止
+  - point/range/table SIREAD
+  - reader 不阻塞 writer
+  - writer/write conflict
+  - long snapshot
+  - index / composite index
+  - abort/deadlock
+  - Vacuum
+  - checkpoint
+  - crash/reopen
+  - 多线程重复压力测试
 
 # STOP
 
-阶段 77 完成后停止。
+完成阶段 84 后停止。
 
-不要自行实现：
+不要自行开始：
 
-- Serializable Snapshot Isolation
-- Predicate Lock
-- SSI conflict graph
-- 分布式事务
+- Transactional DDL
+- Foreign Key / CHECK / UNIQUE constraint framework
+- ARIES WAL 重构
+- Distributed transaction
 - Replication
 - Vector Index
 
-完成阶段 77 后重新评审 MVCC、WAL、Optimizer 和存储格式，再制定下一版 roadmap。
+阶段 84 后重新评审 Serializable、WAL 和 SQL 完整性，再制定下一版 roadmap。
