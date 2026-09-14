@@ -624,3 +624,11 @@
 - 测试结果：全新构建无警告，76 / 76 测试及 ASan / UBSan 通过，覆盖 dirty read、lost update、read-your-writes、delete/update visibility、rollback 与 write skew，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 77：MVCC Concurrent Stress。
+
+## 阶段 77：MVCC Concurrent Stress
+
+- 做了什么：新增可重复的 MVCC、索引、事务、恢复综合并发压力测试。
+- 关键设计：并发 reader/writer 与长 snapshot 交错运行；覆盖 abort/deadlock/Vacuum/checkpoint/crash/reopen；每轮校验 tuple 与 unique/non-unique/composite index 一致性。
+- 测试结果：压力场景连续 15 次通过；全新构建无警告，77 / 77 测试及 ASan / UBSan 通过，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：STOP；重新评审 MVCC、WAL、Optimizer 与存储格式后再制定后续 roadmap。
