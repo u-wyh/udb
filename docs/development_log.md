@@ -616,3 +616,11 @@
 - 测试结果：全新构建无警告，75 / 75 测试及 ASan / UBSan 通过，覆盖 repeatable read、phantom 隔离、dirty read 防护、索引路径与写冲突，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 76：Snapshot Isolation Semantics。
+
+## 阶段 76：Snapshot Isolation Semantics
+
+- 做了什么：补齐 Snapshot Isolation 的端到端语义验证并固定其行为边界。
+- 关键设计：同一 snapshot 重建历史 update/delete；RID 写冲突阻止 lost update；不同 RID 的并发写允许 SI 标准 write skew。
+- 测试结果：全新构建无警告，76 / 76 测试及 ASan / UBSan 通过，覆盖 dirty read、lost update、read-your-writes、delete/update visibility、rollback 与 write skew，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 77：MVCC Concurrent Stress。
