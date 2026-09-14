@@ -52,7 +52,9 @@ ExecutionResult SqlEngine::ExecuteSQL(std::string_view sql) {
         command == "BEGIN ISOLATION LEVEL REPEATABLE READ" ||
         command == "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ" ||
         command == "BEGIN ISOLATION LEVEL SNAPSHOT" ||
-        command == "BEGIN TRANSACTION ISOLATION LEVEL SNAPSHOT") {
+        command == "BEGIN TRANSACTION ISOLATION LEVEL SNAPSHOT" ||
+        command == "BEGIN ISOLATION LEVEL SERIALIZABLE" ||
+        command == "BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE") {
         if (current_transaction_ != nullptr) {
             throw std::logic_error("A transaction is already active");
         }
@@ -63,6 +65,8 @@ ExecutionResult SqlEngine::ExecuteSQL(std::string_view sql) {
             isolation_level = IsolationLevel::RepeatableRead;
         } else if (command.find("SNAPSHOT") != std::string::npos) {
             isolation_level = IsolationLevel::SnapshotIsolation;
+        } else if (command.find("SERIALIZABLE") != std::string::npos) {
+            isolation_level = IsolationLevel::Serializable;
         }
         current_transaction_ = &transaction_manager_.Begin(isolation_level);
         ExecutionResult result{PlanType::Begin};
@@ -72,8 +76,14 @@ ExecutionResult SqlEngine::ExecuteSQL(std::string_view sql) {
     if (command == "COMMIT") {
         if (current_transaction_ == nullptr) { throw std::logic_error("No active transaction"); }
         const auto id = current_transaction_->GetId();
-        transaction_manager_.Commit(*current_transaction_);
-        current_transaction_ = nullptr;
+        try {
+            transaction_manager_.Commit(*current_transaction_);
+            current_transaction_ = nullptr;
+        } catch (...) {
+            transaction_manager_.Abort(*current_transaction_, [&] { ReloadIndexRoots(catalog_); });
+            current_transaction_ = nullptr;
+            throw;
+        }
         ExecutionResult result{PlanType::Commit};
         result.transaction_id = id;
         return result;

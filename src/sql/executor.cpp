@@ -187,6 +187,9 @@ std::optional<Tuple> ReadTuple(const TableHeap& heap, RID rid, const Schema& sch
             context->GetTransaction().GetId());
         if (!visible) { return std::nullopt; }
         record = std::move(visible->record);
+        if (context->GetTransaction().GetIsolationLevel() == IsolationLevel::Serializable) {
+            versions->RegisterTupleRead(context->GetTransaction(), rid);
+        }
     } else if (meta.is_deleted) {
         return std::nullopt;
     }
@@ -307,6 +310,56 @@ void AcquireExecutionLocks(const PlanNode& plan, StatementLockGuard& locks,
     }
 }
 
+void RegisterSerializablePlanReads(const PlanNode& plan, ExecutionContext& context) {
+    auto* manager = context.GetTransactionManager();
+    auto& transaction = context.GetTransaction();
+    if (manager == nullptr || transaction.GetIsolationLevel() != IsolationLevel::Serializable) {
+        return;
+    }
+    switch (plan.GetType()) {
+        case PlanType::SeqScan:
+            manager->RegisterTableRead(transaction,
+                dynamic_cast<const SeqScanPlan&>(plan).GetTableId());
+            return;
+        case PlanType::IndexScan: {
+            const auto& scan = dynamic_cast<const IndexScanPlan&>(plan);
+            manager->RegisterIndexRead(transaction, scan.GetTableId(), scan.GetIndexId(),
+                                       scan.GetKey(), true, scan.GetKey(), true);
+            return;
+        }
+        case PlanType::IndexRangeScan: {
+            const auto& scan = dynamic_cast<const IndexRangeScanPlan&>(plan);
+            manager->RegisterIndexRead(transaction, scan.GetTableId(), scan.GetIndexId(),
+                                       scan.GetLowerBound(), scan.IsLowerInclusive(),
+                                       scan.GetUpperBound(), scan.IsUpperInclusive());
+            return;
+        }
+        case PlanType::IndexOnlyScan: {
+            const auto& scan = dynamic_cast<const IndexOnlyScanPlan&>(plan);
+            const auto lower = scan.GetExactKey() ? scan.GetExactKey() : scan.GetLowerBound();
+            const auto upper = scan.GetExactKey() ? scan.GetExactKey() : scan.GetUpperBound();
+            manager->RegisterIndexRead(transaction, scan.GetTableId(), scan.GetIndexId(),
+                                       lower, scan.GetExactKey() ? true : scan.IsLowerInclusive(),
+                                       upper, scan.GetExactKey() ? true : scan.IsUpperInclusive());
+            return;
+        }
+        case PlanType::Aggregate:
+            manager->RegisterTableRead(transaction,
+                dynamic_cast<const AggregatePlan&>(plan).GetTableId());
+            return;
+        case PlanType::CrossJoin:
+        case PlanType::NestedLoopJoin:
+        case PlanType::HashJoin: {
+            const auto& join = dynamic_cast<const JoinPlan&>(plan);
+            manager->RegisterTableRead(transaction, join.GetLeftTableId());
+            manager->RegisterTableRead(transaction, join.GetRightTableId());
+            return;
+        }
+        default:
+            return;
+    }
+}
+
 bool WritesPages(PlanType type) {
     return type == PlanType::CreateTable || type == PlanType::CreateIndex ||
            type == PlanType::DropTable || type == PlanType::DropIndex ||
@@ -370,6 +423,14 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
                 ? TupleMeta{TransactionManager::EncodeTransactionTimestamp(
                                 context->GetTransaction().GetId()), false}
                 : TupleMeta{};
+            if (versions && context->GetTransaction().GetIsolationLevel() ==
+                                IsolationLevel::Serializable) {
+                versions->RegisterTableWrite(context->GetTransaction(), insert.GetTableId());
+                for (const auto& [index_id, key] : index_keys) {
+                    versions->RegisterIndexWrite(context->GetTransaction(), insert.GetTableId(),
+                                                 index_id, key);
+                }
+            }
             result.inserted_rid =
                 catalog_.GetTableHeap(insert.GetTableId()).InsertRecord(record, meta);
             for (const auto& [index_id, key] : index_keys) {
@@ -650,13 +711,20 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
                 matches.push_back(std::move(match));
             }
             auto* versions = context ? context->GetTransactionManager() : nullptr;
+            if (versions && !matches.empty() && context->GetTransaction().GetIsolationLevel() ==
+                                                    IsolationLevel::Serializable) {
+                versions->RegisterTableWrite(context->GetTransaction(), deletion.GetTableId());
+            }
             for (const auto& match : matches) {
                 if (versions) {
+                    versions->RegisterTupleWrite(context->GetTransaction(), match.rid);
                     versions->CheckWriteConflict(context->GetTransaction(),
                                                  heap.GetTupleMeta(match.rid));
                 }
                 for (const auto& [index_id, key] : match.keys) {
                     if (versions) {
+                        versions->RegisterIndexWrite(context->GetTransaction(),
+                                                     deletion.GetTableId(), index_id, key);
                         versions->RegisterStaleIndexEntry(context->GetTransaction(),
                                                           index_id, key, match.rid);
                     }
@@ -755,9 +823,24 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
             auto* versions = context ? context->GetTransactionManager() : nullptr;
             std::map<index_id_t, std::map<IndexKey, RID>> proposed_keys;
             if (versions) {
+                if (!replacements.empty() && context->GetTransaction().GetIsolationLevel() ==
+                                                 IsolationLevel::Serializable) {
+                    versions->RegisterTableWrite(context->GetTransaction(), update.GetTableId());
+                }
                 for (const auto& replacement : replacements) {
+                    versions->RegisterTupleWrite(context->GetTransaction(), replacement.rid);
                     versions->CheckWriteConflict(context->GetTransaction(),
                                                  replacement.old_meta);
+                    for (const auto& change : replacement.index_changes) {
+                        if (change.old_key) {
+                            versions->RegisterIndexWrite(context->GetTransaction(),
+                                update.GetTableId(), change.index_id, *change.old_key);
+                        }
+                        if (change.new_key) {
+                            versions->RegisterIndexWrite(context->GetTransaction(),
+                                update.GetTableId(), change.index_id, *change.new_key);
+                        }
+                    }
                 }
             }
             for (const auto& replacement : replacements) {
@@ -820,6 +903,7 @@ ExecutionResult Executor::Execute(const PlanNode& plan, ExecutionContext& contex
     if (!transaction.IsActive()) { throw std::logic_error("Execution transaction is not active"); }
     StatementLockGuard statement_locks(context);
     AcquireExecutionLocks(plan, statement_locks, catalog_);
+    RegisterSerializablePlanReads(plan, context);
     auto& pool = catalog_.GetBufferPoolManager();
     const bool writes_pages = WritesPages(plan.GetType());
     if (writes_pages) { pool.SetActiveTransaction(&transaction); }

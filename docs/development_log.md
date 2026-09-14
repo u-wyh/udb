@@ -664,3 +664,11 @@
 - 测试结果：全新构建无警告，81 / 81 测试及 ASan / UBSan 通过，覆盖危险 pivot、单边依赖与安全回滚，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 82：Serializable SQL Integration。
+
+## 阶段 82：Serializable SQL Integration
+
+- 做了什么：将 SERIALIZABLE 显式事务、SSI reads/writes 与提交冲突检测接入完整 SQL 执行链。
+- 关键设计：point/range/table 扫描按访问路径登记 SIREAD；DML 登记 tuple/table/index writes；serialization failure 在提交前自动回滚。
+- 测试结果：全新构建无警告，82 / 82 测试及 ASan / UBSan 通过，覆盖全部扫描路径、DML、非阻塞读取与 SQL write-skew abort，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 83：SSI GC。

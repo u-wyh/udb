@@ -84,6 +84,9 @@ std::optional<Tuple> TableScanOperator::Next() {
                 context_->GetTransaction().GetId());
             if (!visible) { continue; }
             record = std::move(visible->record);
+            if (context_->GetTransaction().GetIsolationLevel() == IsolationLevel::Serializable) {
+                versions->RegisterTupleRead(context_->GetTransaction(), *rid);
+            }
         } else if (meta.is_deleted) {
             continue;
         }
