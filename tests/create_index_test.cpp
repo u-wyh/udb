@@ -222,7 +222,7 @@ void TestMetadata(const std::filesystem::path& directory) {
     }
     const auto original = ReadFile(meta);
     const auto data = ReadFile(path);
-    Check(original.size() == 131 && static_cast<unsigned char>(original[8]) == 4,
+    Check(original.size() == 139 && static_cast<unsigned char>(original[8]) == 5,
           "Index metadata fixture layout changed unexpectedly");
     auto reject = [&](std::string bytes) {
         WriteFile(meta, bytes);
@@ -230,12 +230,12 @@ void TestMetadata(const std::filesystem::path& directory) {
         Check(ReadFile(meta) == bytes && ReadFile(path) == data, "Failed metadata Open changed files");
     };
     auto bytes = original;
-    Put(bytes, 99, 99, 8); reject(bytes);  // Missing table ID.
-    bytes = original; Put(bytes, 115, 1, 8); reject(bytes);  // Invalid column index.
-    bytes = original; Put(bytes, 123, std::filesystem::file_size(path) / PAGE_SIZE, 8); reject(bytes);
-    bytes = original; Put(bytes, 123, 0, 8); reject(bytes);  // Allocated but not a B+ tree header.
-    bytes = original; Put(bytes, 76, UINT64_MAX, 8); reject(bytes);  // Invalid index count.
-    bytes = original; Put(bytes, 68, 0, 8); reject(bytes);  // next_index_id is not above existing ID.
+    Put(bytes, 107, 99, 8); reject(bytes);  // Missing table ID.
+    bytes = original; Put(bytes, 123, 1, 8); reject(bytes);  // Invalid column index.
+    bytes = original; Put(bytes, 131, std::filesystem::file_size(path) / PAGE_SIZE, 8); reject(bytes);
+    bytes = original; Put(bytes, 131, 0, 8); reject(bytes);  // Allocated but not a B+ tree header.
+    bytes = original; Put(bytes, 84, UINT64_MAX, 8); reject(bytes);  // Invalid index count.
+    bytes = original; Put(bytes, 76, 0, 8); reject(bytes);  // next_index_id is not above existing ID.
     reject(original.substr(0, original.size() - 1));
     WriteFile(meta, original);
     auto database = Database::Open(path, 1);
@@ -243,6 +243,7 @@ void TestMetadata(const std::filesystem::path& directory) {
           "Valid index metadata failed after corruption cases");
     database->Close();
     auto legacy = original;
+    legacy.erase(24, 8);  // v4 and earlier do not store the commit timestamp.
     legacy[8] = 3;
     legacy.erase(107, 8);  // v3 has a single column index without a count.
     WriteFile(meta, legacy);
@@ -261,6 +262,7 @@ void TestMetadata(const std::filesystem::path& directory) {
     }
     database->Close();
     bytes = ReadFile(v2_meta);
+    bytes.erase(24, 8);
     bytes.resize(bytes.size() - 16);  // Remove the v3 empty-index suffix.
     Put(bytes, 8, 2, 4);
     WriteFile(v2_meta, bytes);
@@ -270,7 +272,7 @@ void TestMetadata(const std::filesystem::path& directory) {
           database->GetCatalog().ListIndexes().empty(),
           "v2 metadata compatibility failed");
     database->Close();
-    Check(static_cast<unsigned char>(ReadFile(v2_meta)[8]) == 4, "v2 metadata was not upgraded on save");
+    Check(static_cast<unsigned char>(ReadFile(v2_meta)[8]) == 5, "v2 metadata was not upgraded on save");
 }
 
 }  // namespace

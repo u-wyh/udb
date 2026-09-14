@@ -592,3 +592,11 @@
 - 测试结果：全新构建无警告，72 / 72 测试及 ASan / UBSan 通过，覆盖提交/loser MVCC 写、各类索引、截断 WAL、重复恢复、时间戳单调性和恢复后 Vacuum，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 73：MVCC Checkpoint / Reopen。
+
+## 阶段 73：MVCC Checkpoint / Reopen
+
+- 做了什么：让 checkpoint 将全局 commit timestamp 持久化到 metadata，并在安全刷盘后回收 WAL。
+- 关键设计：metadata 升级为 v5 并兼容读取 v1～v4；reopen 取 metadata 与 WAL 恢复时间戳的最大值；Vacuum 后的 Tuple 与索引状态随 checkpoint 原子保存。
+- 测试结果：全新构建无警告，73 / 73 测试及 ASan / UBSan 通过，覆盖跨进程 checkpoint/reopen、WAL 回收、Vacuum、索引一致性、时间戳单调性和旧 metadata 兼容，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 74：MVCC READ COMMITTED。

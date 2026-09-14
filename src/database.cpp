@@ -11,8 +11,8 @@
 namespace udb {
 namespace {
 
-// v4: magic:u64, version:u32, table_count:u32, next_table_id:u64,
-//     free_page_count:u64, then that many free_page_id:u64 values.
+// v5: magic:u64, version:u32, table_count:u32, next_table_id:u64,
+//     last_commit_timestamp:u64, free_page_count:u64, then free_page_id:u64 values.
 // Table: id:u64, name:(u32 length + bytes), first_page:u64, column_count:u32.
 // Column: name:(u32 length + bytes), type:u8 (0..4), max_length:u32.
 // After tables: next_index_id:u64, index_count:u64, then Index entries:
@@ -20,7 +20,7 @@ namespace {
 // column_indexes:u64[], header_page_id:u64. v3 stored one column without a count.
 // All integers are little-endian. No struct layouts or native string objects.
 constexpr std::uint64_t kMagic = 0x314154454d424455;  // "UDBMETA1"
-constexpr std::uint32_t kVersion = 4;
+constexpr std::uint32_t kVersion = 5;
 
 std::filesystem::path MetadataPath(const std::filesystem::path& path) {
     if (path.empty() || path.extension() != ".udb") {
@@ -221,6 +221,7 @@ void Database::SaveMetadata() const {
     Write(bytes, kVersion, 4);
     Write(bytes, ids.size(), 4);
     Write(bytes, catalog_->next_id_, 8);
+    Write(bytes, TransactionManager::GetLastCommitTimestamp(), 8);
     Write(bytes, disk_->GetFreePageIds().size(), 8);
     for (const auto page_id : disk_->GetFreePageIds()) {
         Write(bytes, static_cast<std::uint64_t>(page_id), 8);
@@ -277,11 +278,14 @@ void Database::LoadMetadata() {
     Reader reader(metadata_path_);
     if (reader.Read(8) != kMagic) { throw std::runtime_error("Invalid metadata magic"); }
     const auto version = reader.Read(4);
-    if (version != 1 && version != 2 && version != 3 && version != kVersion) {
+    if (version < 1 || version > kVersion) {
         throw std::runtime_error("Unsupported metadata version");
     }
     const auto count = reader.Read(4);
     const auto next_id = reader.Read(8);
+    if (version >= 5) {
+        TransactionManager::RestoreLastCommitTimestamp(reader.Read(8));
+    }
     std::vector<page_id_t> free_pages;
     if (version >= 2) {
         const auto free_count = reader.Read(8);
