@@ -656,3 +656,11 @@
 - 测试结果：全新构建无警告，80 / 80 测试及 ASan / UBSan 通过，覆盖表级、范围边界、并发判定与去重，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 81：SSI Dangerous Structure Detection。
+
+## 阶段 81：SSI Dangerous Structure Detection
+
+- 做了什么：实现 Serializable transaction 的 SSI dangerous structure 检测与提交拒绝。
+- 关键设计：事务同时具有 incoming/outgoing rw-antidependency 时作为危险 pivot 保守 abort；检测发生在 page/WAL 提交前。
+- 测试结果：全新构建无警告，81 / 81 测试及 ASan / UBSan 通过，覆盖危险 pivot、单边依赖与安全回滚，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 82：Serializable SQL Integration。

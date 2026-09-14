@@ -36,6 +36,12 @@ public:
     WriteConflictError() : std::runtime_error("Tuple was changed after the transaction snapshot") {}
 };
 
+class SerializationFailure : public std::runtime_error {
+public:
+    SerializationFailure()
+        : std::runtime_error("Serializable transaction has a dangerous rw-dependency structure") {}
+};
+
 struct VersionLink {
     transaction_id_t transaction_id;
     std::size_t undo_index;
@@ -195,6 +201,8 @@ public:
     void RegisterTableWrite(Transaction& writer, table_id_t table_id);
     void RegisterIndexWrite(Transaction& writer, table_id_t table_id,
                             std::uint64_t index_id, const IndexKey& key);
+    bool HasDangerousStructure(const Transaction& transaction) const;
+    void CheckSerializableCommit(const Transaction& transaction) const;
     std::size_t GetRetainedSsiTransactionCount() const;
     std::size_t GetTupleSireadCount() const;
     std::size_t GetPredicateSireadCount() const;

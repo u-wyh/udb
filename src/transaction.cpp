@@ -135,6 +135,7 @@ void TransactionManager::Commit(Transaction& transaction) {
     auto& managed = RequireManaged(transaction);
     if (!managed.IsActive()) { throw std::logic_error("Transaction is not active"); }
     if (managed.IsAbortRequested()) { throw DeadlockError(); }
+    CheckSerializableCommit(managed);
     if (pool_ != nullptr) { pool_->ThrowIfWriteError(); }
     {
         const std::lock_guard<std::mutex> lock(timestamp_mutex_);
@@ -395,6 +396,21 @@ void TransactionManager::RegisterIndexWrite(Transaction& writer, table_id_t tabl
 std::size_t TransactionManager::GetPredicateSireadCount() const {
     const std::lock_guard<std::mutex> lock(transactions_mutex_);
     return predicate_sireads_.size();
+}
+
+bool TransactionManager::HasDangerousStructure(const Transaction& transaction) const {
+    const std::lock_guard<std::mutex> lock(transactions_mutex_);
+    const auto found = transactions_.find(transaction.GetId());
+    if (found == transactions_.end() || found->second.get() != &transaction) {
+        throw std::invalid_argument("SSI transaction is not owned by this manager");
+    }
+    return transaction.GetIsolationLevel() == IsolationLevel::Serializable &&
+           !transaction.incoming_rw_dependencies_.empty() &&
+           !transaction.outgoing_rw_dependencies_.empty();
+}
+
+void TransactionManager::CheckSerializableCommit(const Transaction& transaction) const {
+    if (HasDangerousStructure(transaction)) { throw SerializationFailure(); }
 }
 
 std::size_t TransactionManager::GetRetainedSsiTransactionCount() const {
