@@ -141,6 +141,7 @@ public:
     std::size_t GetActiveCount() const;
     static timestamp_t GetLastCommitTimestamp();
     static timestamp_t GetWatermark();
+    static void RestoreLastCommitTimestamp(timestamp_t timestamp);
     static timestamp_t EncodeTransactionTimestamp(transaction_id_t transaction_id);
     static bool IsTransactionTimestamp(timestamp_t timestamp);
     static transaction_id_t DecodeTransactionTimestamp(timestamp_t timestamp);

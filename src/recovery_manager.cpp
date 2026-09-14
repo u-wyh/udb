@@ -58,6 +58,7 @@ void Undo(DiskManager& disk, const LogRecord& record,
 std::map<page_id_t, bool> RecoveryManager::Recover(
     DiskManager& disk, LogManager& log_manager) {
     const auto records = log_manager.GetRecords();
+    timestamp_t recovered_commit_timestamp = 0;
     std::vector<Unit> units;
     std::unordered_map<transaction_id_t, std::size_t> active;
     for (std::size_t i = 0; i < records.size(); ++i) {
@@ -76,6 +77,10 @@ std::map<page_id_t, bool> RecoveryManager::Recover(
             units[found->second].state = record.GetType() == LogRecordType::Commit
                                                 ? UnitState::Committed : UnitState::Aborted;
             active.erase(found);
+            if (record.GetType() == LogRecordType::Commit && record.GetCommitTimestamp()) {
+                recovered_commit_timestamp = std::max(recovered_commit_timestamp,
+                                                      *record.GetCommitTimestamp());
+            }
         }
     }
 
@@ -110,6 +115,7 @@ std::map<page_id_t, bool> RecoveryManager::Recover(
         }
     }
     if (appended_abort) { log_manager.Flush(); }
+    TransactionManager::RestoreLastCommitTimestamp(recovered_commit_timestamp);
     return page_states;
 }
 

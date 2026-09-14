@@ -4,6 +4,7 @@
 #include "udb/lock_manager.h"
 #include "udb/slotted_page.h"
 
+#include <algorithm>
 #include <limits>
 #include <stdexcept>
 
@@ -51,6 +52,14 @@ timestamp_t TransactionManager::GetWatermark() {
     const std::lock_guard<std::mutex> lock(timestamp_mutex_);
     return active_read_timestamps_.empty() ? last_commit_ts_
                                            : active_read_timestamps_.begin()->first;
+}
+
+void TransactionManager::RestoreLastCommitTimestamp(timestamp_t timestamp) {
+    const std::lock_guard<std::mutex> lock(timestamp_mutex_);
+    if (IsTransactionTimestamp(timestamp)) {
+        throw std::invalid_argument("Recovered commit timestamp is invalid");
+    }
+    last_commit_ts_ = std::max(last_commit_ts_, timestamp);
 }
 
 Transaction& TransactionManager::Begin(IsolationLevel isolation_level) {
@@ -142,7 +151,7 @@ void TransactionManager::Commit(Transaction& transaction) {
             pool_->ThrowIfWriteError();
         }
         if (log_manager_ != nullptr) {
-            log_manager_->Append(LogRecord::Commit(managed.GetId()));
+            log_manager_->Append(LogRecord::Commit(managed.GetId(), commit_timestamp));
             log_manager_->Flush();
         }
         last_commit_ts_ = commit_timestamp;

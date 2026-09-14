@@ -584,3 +584,11 @@
 - 测试结果：全新构建无警告，71 / 71 测试及 ASan / UBSan 通过，覆盖活跃 snapshot 保护、watermark 推进、物理回收、索引清理和 RID 不复用，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 72：MVCC WAL / Recovery。
+
+## 阶段 72：MVCC WAL / Recovery
+
+- 做了什么：让 physical full-page WAL 恢复 MVCC 当前 Tuple、TupleMeta、逻辑删除和索引状态，并恢复全局 commit timestamp。
+- 关键设计：COMMIT 记录兼容地携带 commit timestamp；恢复只重建 crash 时的最终当前版本，不恢复已死亡的 Undo Chain 与 active snapshot；loser 继续由 before image 反向撤销。
+- 测试结果：全新构建无警告，72 / 72 测试及 ASan / UBSan 通过，覆盖提交/loser MVCC 写、各类索引、截断 WAL、重复恢复、时间戳单调性和恢复后 Vacuum，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 73：MVCC Checkpoint / Reopen。

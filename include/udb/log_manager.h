@@ -30,7 +30,8 @@ public:
     static LogRecord PageAllocate(transaction_id_t transaction_id, page_id_t page_id);
     static LogRecord PageFree(transaction_id_t transaction_id, page_id_t page_id,
                               const Page& before);
-    static LogRecord Commit(transaction_id_t transaction_id);
+    static LogRecord Commit(transaction_id_t transaction_id,
+                            std::optional<timestamp_t> commit_timestamp = std::nullopt);
     static LogRecord Abort(transaction_id_t transaction_id);
 
     lsn_t GetLsn() const { return lsn_; }
@@ -39,6 +40,7 @@ public:
     std::optional<page_id_t> GetPageId() const { return page_id_; }
     const std::optional<Page>& GetBeforeImage() const { return before_image_; }
     const std::optional<Page>& GetAfterImage() const { return after_image_; }
+    std::optional<timestamp_t> GetCommitTimestamp() const { return commit_timestamp_; }
     void Validate() const;
 
 private:
@@ -47,15 +49,18 @@ private:
     LogRecord(LogRecordType type, transaction_id_t transaction_id,
               std::optional<page_id_t> page_id = std::nullopt,
               std::optional<Page> before = std::nullopt,
-              std::optional<Page> after = std::nullopt)
+              std::optional<Page> after = std::nullopt,
+              std::optional<timestamp_t> commit_timestamp = std::nullopt)
         : transaction_id_(transaction_id), type_(type), page_id_(page_id),
-          before_image_(std::move(before)), after_image_(std::move(after)) {}
+          before_image_(std::move(before)), after_image_(std::move(after)),
+          commit_timestamp_(commit_timestamp) {}
     lsn_t lsn_ = 0;
     transaction_id_t transaction_id_;
     LogRecordType type_;
     std::optional<page_id_t> page_id_;
     std::optional<Page> before_image_;
     std::optional<Page> after_image_;
+    std::optional<timestamp_t> commit_timestamp_;
 };
 
 // Append-only, single-threaded WAL foundation. Append assigns contiguous LSNs;

@@ -16,8 +16,9 @@ public:
     static LogRecord Make(LogRecordType type, transaction_id_t transaction_id,
                           std::optional<page_id_t> page_id,
                           std::optional<Page> before, std::optional<Page> after,
-                          lsn_t lsn) {
-        LogRecord record(type, transaction_id, page_id, std::move(before), std::move(after));
+                          std::optional<timestamp_t> commit_timestamp, lsn_t lsn) {
+        LogRecord record(type, transaction_id, page_id, std::move(before), std::move(after),
+                         commit_timestamp);
         record.lsn_ = lsn;
         return record;
     }
@@ -96,9 +97,10 @@ std::vector<unsigned char> Encode(const LogRecord& record) {
     Write(bytes, 0, 3);
     Write(bytes, record.GetLsn(), 8);
     Write(bytes, record.GetTransactionId(), 8);
-    Write(bytes, record.GetPageId()
-                     ? static_cast<std::uint64_t>(*record.GetPageId())
-                     : std::numeric_limits<std::uint64_t>::max(), 8);
+    Write(bytes, record.GetCommitTimestamp()
+                     ? *record.GetCommitTimestamp()
+                     : (record.GetPageId() ? static_cast<std::uint64_t>(*record.GetPageId())
+                                           : std::numeric_limits<std::uint64_t>::max()), 8);
     if (record.GetBeforeImage()) {
         const auto& data = record.GetBeforeImage()->data;
         bytes.insert(bytes.end(), data.begin(), data.end());
@@ -155,7 +157,11 @@ std::vector<LogRecord> Decode(const std::vector<unsigned char>& file,
         const auto transaction_id = Read(encoded, 32, 8);
         const auto encoded_page_id = Read(encoded, 40, 8);
         std::optional<page_id_t> page_id;
-        if (encoded_page_id != std::numeric_limits<std::uint64_t>::max()) {
+        std::optional<timestamp_t> commit_timestamp;
+        if (type == LogRecordType::Commit &&
+            encoded_page_id != std::numeric_limits<std::uint64_t>::max()) {
+            commit_timestamp = encoded_page_id;
+        } else if (encoded_page_id != std::numeric_limits<std::uint64_t>::max()) {
             if (encoded_page_id > static_cast<std::uint64_t>(std::numeric_limits<page_id_t>::max())) {
                 throw std::runtime_error("Invalid WAL page ID");
             }
@@ -176,7 +182,8 @@ std::vector<LogRecord> Decode(const std::vector<unsigned char>& file,
                         after->data.begin());
         }
         auto record = LogRecordDecoder::Make(type, transaction_id, page_id,
-                                             std::move(before), std::move(after), lsn);
+                                             std::move(before), std::move(after),
+                                             commit_timestamp, lsn);
         record.Validate();
         records.push_back(std::move(record));
         position += static_cast<std::size_t>(size);
@@ -201,8 +208,10 @@ LogRecord LogRecord::PageFree(transaction_id_t transaction_id, page_id_t page_id
                               const Page& before) {
     return LogRecord(LogRecordType::PageFree, transaction_id, page_id, before);
 }
-LogRecord LogRecord::Commit(transaction_id_t transaction_id) {
-    return LogRecord(LogRecordType::Commit, transaction_id);
+LogRecord LogRecord::Commit(transaction_id_t transaction_id,
+                            std::optional<timestamp_t> commit_timestamp) {
+    return LogRecord(LogRecordType::Commit, transaction_id, std::nullopt,
+                     std::nullopt, std::nullopt, commit_timestamp);
 }
 LogRecord LogRecord::Abort(transaction_id_t transaction_id) {
     return LogRecord(LogRecordType::Abort, transaction_id);
@@ -212,6 +221,12 @@ void LogRecord::Validate() const {
     const bool has_page = page_id_.has_value();
     const bool has_before = before_image_.has_value();
     const bool has_after = after_image_.has_value();
+    if (type_ != LogRecordType::Commit && commit_timestamp_) {
+        throw std::invalid_argument("Only COMMIT WAL records carry a commit timestamp");
+    }
+    if (commit_timestamp_ && (*commit_timestamp_ >> 63U) != 0) {
+        throw std::invalid_argument("COMMIT WAL timestamp must be a committed timestamp");
+    }
     if (has_page && *page_id_ < 0) { throw std::invalid_argument("WAL page ID must be nonnegative"); }
     switch (type_) {
         case LogRecordType::Begin:
