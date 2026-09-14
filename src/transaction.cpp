@@ -238,6 +238,32 @@ void TransactionManager::CheckWriteConflict(Transaction& transaction,
     if (current_meta.timestamp > managed.GetReadTimestamp()) { throw WriteConflictError(); }
 }
 
+void TransactionManager::AddRwDependency(Transaction& reader, Transaction& writer) {
+    if (&reader == &writer) { return; }
+    const std::lock_guard<std::mutex> lock(transactions_mutex_);
+    const auto reader_found = transactions_.find(reader.GetId());
+    const auto writer_found = transactions_.find(writer.GetId());
+    if (reader_found == transactions_.end() || reader_found->second.get() != &reader ||
+        writer_found == transactions_.end() || writer_found->second.get() != &writer) {
+        throw std::invalid_argument("SSI dependency transaction is not owned by this manager");
+    }
+    if (reader.GetIsolationLevel() != IsolationLevel::Serializable ||
+        writer.GetIsolationLevel() != IsolationLevel::Serializable) {
+        throw std::invalid_argument("SSI dependency requires SERIALIZABLE transactions");
+    }
+    if (!writer.IsActive()) { throw std::logic_error("SSI writer transaction is not active"); }
+    reader.outgoing_rw_dependencies_.insert(writer.GetId());
+    writer.incoming_rw_dependencies_.insert(reader.GetId());
+}
+
+std::size_t TransactionManager::GetRetainedSsiTransactionCount() const {
+    const std::lock_guard<std::mutex> lock(transactions_mutex_);
+    return static_cast<std::size_t>(std::count_if(
+        transactions_.begin(), transactions_.end(), [](const auto& entry) {
+            return entry.second->GetIsolationLevel() == IsolationLevel::Serializable;
+        }));
+}
+
 void TransactionManager::RegisterStaleIndexEntry(Transaction& transaction,
                                                  std::uint64_t index_id,
                                                  const IndexKey& key, RID rid) {

@@ -29,7 +29,7 @@ using transaction_id_t = std::uint64_t;
 using timestamp_t = std::uint64_t;
 
 enum class TransactionState { Active, Committed, Aborted };
-enum class IsolationLevel { ReadCommitted, RepeatableRead, SnapshotIsolation };
+enum class IsolationLevel { ReadCommitted, RepeatableRead, SnapshotIsolation, Serializable };
 
 class WriteConflictError : public std::runtime_error {
 public:
@@ -101,6 +101,12 @@ public:
     const std::set<table_id_t>& GetExclusiveTableLocks() const { return exclusive_table_locks_; }
     const std::set<RowLockId>& GetSharedRowLocks() const { return shared_row_locks_; }
     const std::set<RowLockId>& GetExclusiveRowLocks() const { return exclusive_row_locks_; }
+    const std::set<transaction_id_t>& GetIncomingRwDependencies() const {
+        return incoming_rw_dependencies_;
+    }
+    const std::set<transaction_id_t>& GetOutgoingRwDependencies() const {
+        return outgoing_rw_dependencies_;
+    }
 
 private:
     friend class TransactionManager;
@@ -124,6 +130,8 @@ private:
     std::vector<UndoRecord> undo_records_;
     std::set<RID> write_rids_;
     std::set<StaleIndexEntry> stale_index_entries_;
+    std::set<transaction_id_t> incoming_rw_dependencies_;
+    std::set<transaction_id_t> outgoing_rw_dependencies_;
 };
 
 class TransactionManager {
@@ -151,6 +159,10 @@ public:
                                  const Record& record, TupleMeta meta);
     void RegisterWrite(Transaction& transaction, RID rid);
     void CheckWriteConflict(Transaction& transaction, TupleMeta current_meta);
+    // Records reader -> writer without acquiring a blocking lock. Both
+    // transactions must use SERIALIZABLE; committed reader state is retained.
+    void AddRwDependency(Transaction& reader, Transaction& writer);
+    std::size_t GetRetainedSsiTransactionCount() const;
     void RegisterStaleIndexEntry(Transaction& transaction, std::uint64_t index_id,
                                  const IndexKey& key, RID rid);
     std::vector<std::pair<IndexKey, RID>> GetStaleIndexEntries(

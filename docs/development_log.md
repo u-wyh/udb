@@ -632,3 +632,11 @@
 - 测试结果：压力场景连续 15 次通过；全新构建无警告，77 / 77 测试及 ASan / UBSan 通过，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：STOP；重新评审 MVCC、WAL、Optimizer 与存储格式后再制定后续 roadmap。
+
+## 阶段 78：SSI Transaction Core
+
+- 做了什么：新增 SERIALIZABLE isolation level 与事务级 SSI rw-antidependency 状态。
+- 关键设计：dependency 以 reader → writer 双向集合记录且不加阻塞锁；已提交 Serializable 事务的必要冲突信息暂时保留。
+- 测试结果：全新构建无警告，78 / 78 测试及 ASan / UBSan 通过，覆盖 dependency 去重、方向、提交后保留与隔离级别边界，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 79：Tuple SIREAD。
