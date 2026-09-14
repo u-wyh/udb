@@ -107,6 +107,7 @@ public:
     const std::set<transaction_id_t>& GetOutgoingRwDependencies() const {
         return outgoing_rw_dependencies_;
     }
+    const std::set<RID>& GetTupleSireads() const { return tuple_sireads_; }
 
 private:
     friend class TransactionManager;
@@ -132,6 +133,7 @@ private:
     std::set<StaleIndexEntry> stale_index_entries_;
     std::set<transaction_id_t> incoming_rw_dependencies_;
     std::set<transaction_id_t> outgoing_rw_dependencies_;
+    std::set<RID> tuple_sireads_;
 };
 
 class TransactionManager {
@@ -162,7 +164,10 @@ public:
     // Records reader -> writer without acquiring a blocking lock. Both
     // transactions must use SERIALIZABLE; committed reader state is retained.
     void AddRwDependency(Transaction& reader, Transaction& writer);
+    void RegisterTupleRead(Transaction& reader, RID rid);
+    void RegisterTupleWrite(Transaction& writer, RID rid);
     std::size_t GetRetainedSsiTransactionCount() const;
+    std::size_t GetTupleSireadCount() const;
     void RegisterStaleIndexEntry(Transaction& transaction, std::uint64_t index_id,
                                  const IndexKey& key, RID rid);
     std::vector<std::pair<IndexKey, RID>> GetStaleIndexEntries(
@@ -189,6 +194,7 @@ private:
     mutable std::mutex undo_mutex_;
     std::map<RID, VersionLink> version_links_;
     std::set<StaleIndexEntry> stale_index_entries_;
+    std::map<RID, std::set<transaction_id_t>> tuple_sireads_;
     BufferPoolManager* pool_;
     LogManager* log_manager_;
     LockManager* lock_manager_;

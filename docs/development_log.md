@@ -640,3 +640,11 @@
 - 测试结果：全新构建无警告，78 / 78 测试及 ASan / UBSan 通过，覆盖 dependency 去重、方向、提交后保留与隔离级别边界，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 79：Tuple SIREAD。
+
+## 阶段 79：Tuple SIREAD
+
+- 做了什么：实现 Serializable transaction 的 RID 级非阻塞 SIREAD 与 tuple write 冲突登记。
+- 关键设计：SIREAD 按 RID/transaction 去重；并发 writer 建立 reader → writer rw-antidependency；已早于 writer snapshot 提交的 reader 不产生伪依赖。
+- 测试结果：全新构建无警告，79 / 79 测试及 ASan / UBSan 通过，覆盖 active/committed reader、并发判定、去重与隔离级别边界，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 80：Predicate / Range SIREAD。

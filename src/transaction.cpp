@@ -256,6 +256,56 @@ void TransactionManager::AddRwDependency(Transaction& reader, Transaction& write
     writer.incoming_rw_dependencies_.insert(reader.GetId());
 }
 
+void TransactionManager::RegisterTupleRead(Transaction& reader, RID rid) {
+    if (rid.page_id < 0) { throw std::invalid_argument("SIREAD requires a valid RID"); }
+    const std::lock_guard<std::mutex> lock(transactions_mutex_);
+    const auto found = transactions_.find(reader.GetId());
+    if (found == transactions_.end() || found->second.get() != &reader) {
+        throw std::invalid_argument("SIREAD transaction is not owned by this manager");
+    }
+    if (!reader.IsActive() || reader.GetIsolationLevel() != IsolationLevel::Serializable) {
+        throw std::logic_error("SIREAD requires an active SERIALIZABLE transaction");
+    }
+    reader.tuple_sireads_.insert(rid);
+    tuple_sireads_[rid].insert(reader.GetId());
+}
+
+void TransactionManager::RegisterTupleWrite(Transaction& writer, RID rid) {
+    if (rid.page_id < 0) { throw std::invalid_argument("SSI write requires a valid RID"); }
+    const std::lock_guard<std::mutex> lock(transactions_mutex_);
+    const auto writer_found = transactions_.find(writer.GetId());
+    if (writer_found == transactions_.end() || writer_found->second.get() != &writer) {
+        throw std::invalid_argument("SSI writer is not owned by this manager");
+    }
+    if (!writer.IsActive() || writer.GetIsolationLevel() != IsolationLevel::Serializable) { return; }
+    const auto reads = tuple_sireads_.find(rid);
+    if (reads == tuple_sireads_.end()) { return; }
+    for (const auto reader_id : reads->second) {
+        if (reader_id == writer.GetId()) { continue; }
+        const auto reader_found = transactions_.find(reader_id);
+        if (reader_found == transactions_.end()) { continue; }
+        auto& reader = *reader_found->second;
+        if (reader.GetState() == TransactionState::Aborted ||
+            reader.GetIsolationLevel() != IsolationLevel::Serializable) { continue; }
+        const bool concurrent = reader.IsActive() ||
+            (reader.GetCommitTimestamp() &&
+             *reader.GetCommitTimestamp() > writer.GetReadTimestamp());
+        if (!concurrent) { continue; }
+        reader.outgoing_rw_dependencies_.insert(writer.GetId());
+        writer.incoming_rw_dependencies_.insert(reader.GetId());
+    }
+}
+
+std::size_t TransactionManager::GetTupleSireadCount() const {
+    const std::lock_guard<std::mutex> lock(transactions_mutex_);
+    std::size_t count = 0;
+    for (const auto& [rid, readers] : tuple_sireads_) {
+        static_cast<void>(rid);
+        count += readers.size();
+    }
+    return count;
+}
+
 std::size_t TransactionManager::GetRetainedSsiTransactionCount() const {
     const std::lock_guard<std::mutex> lock(transactions_mutex_);
     return static_cast<std::size_t>(std::count_if(
