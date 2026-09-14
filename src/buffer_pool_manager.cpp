@@ -50,8 +50,9 @@ void BufferPoolManager::WriteBack(std::size_t index) {
     if (frame.in_use && frame.dirty) {
         ThrowIfWriteErrorLocked();
         EnsureWalDurable(frame);
-        disk_.WritePage(frame.page_id, frame.page);
+        disk_.WritePage(frame.page_id, frame.page, frame.page_lsn);
         frame.dirty = false;
+        frame.page_lsn.reset();
     }
 }
 
@@ -137,6 +138,7 @@ std::pair<page_id_t, Page*> BufferPoolManager::NewPageLocked() {
     auto* page = Install(index, page_id, Page{});
     ClaimPageLocked(page_id, active_transaction);
     frames_[index].page_lsn = allocation_lsn;
+    if (allocation_lsn) { disk_.SetPageLsn(page_id, *allocation_lsn); }
     return {page_id, page};
 }
 
@@ -267,8 +269,9 @@ void BufferPoolManager::FlushPage(page_id_t page_id) {
     }
     ThrowIfWriteErrorLocked();
     EnsureWalDurable(frame);
-    disk_.WritePage(page_id, frame.page);
+    disk_.WritePage(page_id, frame.page, frame.page_lsn);
     frame.dirty = false;
+    frame.page_lsn.reset();
 }
 
 void BufferPoolManager::FlushAllPages() {

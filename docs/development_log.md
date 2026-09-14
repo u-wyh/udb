@@ -688,3 +688,11 @@
 - 测试结果：压力场景额外连续 5 次通过；全新构建无警告，84 / 84 测试及 ASan / UBSan 通过，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：STOP；重新评审 Serializable、WAL 与 SQL 完整性后再制定后续 roadmap。
+
+## 阶段 85：Durable PageLSN Foundation
+
+- 做了什么：为数据页增加版本化、持久化的 pageLSN sidecar，并补齐 WAL-before-data 的 durable 写回顺序。
+- 关键设计：逻辑 Page 格式不变；旧库缺少 sidecar 时以未知 LSN 安全升级；写回依次 fsync WAL、数据页和 pageLSN。
+- 测试结果：全新构建无警告，85 / 85 测试及 ASan / UBSan 通过，覆盖持久化、重开、旧库兼容与格式版本校验，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 86：WAL Transaction Chains。

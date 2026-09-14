@@ -145,8 +145,10 @@ Database::Database(const std::filesystem::path& path, std::size_t capacity)
 std::unique_ptr<Database> Database::Create(const std::filesystem::path& path, std::size_t capacity) {
     const auto metadata = MetadataPath(path);
     const auto wal = WalPath(path);
+    const auto page_lsns = DiskManager::GetPageLsnPath(path);
     if (capacity == 0) { throw std::invalid_argument("Buffer pool capacity must be positive"); }
-    if (Exists(path) || Exists(metadata) || Exists(wal) || Exists(TemporaryPath(metadata))) {
+    if (Exists(path) || Exists(metadata) || Exists(wal) || Exists(page_lsns) ||
+        Exists(TemporaryPath(metadata))) {
         throw std::runtime_error("Database files already exist");
     }
     try {
@@ -158,6 +160,7 @@ std::unique_ptr<Database> Database::Create(const std::filesystem::path& path, st
         std::error_code error;
         std::filesystem::remove(path, error);
         std::filesystem::remove(wal, error);
+        std::filesystem::remove(page_lsns, error);
         throw;
     }
 }

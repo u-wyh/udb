@@ -1,6 +1,7 @@
 #pragma once
 
 #include "udb/page.h"
+#include "udb/lsn.h"
 #include "udb/transaction.h"
 
 #include <filesystem>
@@ -10,8 +11,6 @@
 #include <vector>
 
 namespace udb {
-
-using lsn_t = std::uint64_t;
 
 enum class LogRecordType : std::uint8_t {
     Begin = 0,
