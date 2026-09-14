@@ -712,3 +712,11 @@
 - 测试结果：全新构建无警告，87 / 87 测试及 ASan / UBSan 通过，覆盖交错事务、CLR、重开与分类，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 88：ARIES Redo Pass。
+
+## 阶段 88：ARIES Redo Pass
+
+- 做了什么：实现从 DPT 最小 recLSN 开始的 repeat-history Redo Pass。
+- 关键设计：先按 DPT/recLSN 过滤，再由持久化 pageLSN 跳过已应用日志；实际 redo 同步推进 pageLSN。
+- 测试结果：全新构建无警告，88 / 88 测试及 ASan / UBSan 通过，覆盖 write/allocate/free、pageLSN skip 与重复 redo 幂等，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 89：ARIES Undo Pass。

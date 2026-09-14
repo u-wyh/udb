@@ -15,8 +15,8 @@ struct Unit {
     std::vector<std::size_t> records;
 };
 
-void Redo(DiskManager& disk, const LogRecord& record,
-          std::map<page_id_t, bool>& states) {
+void LegacyRedo(DiskManager& disk, const LogRecord& record,
+                std::map<page_id_t, bool>& states) {
     switch (record.GetType()) {
         case LogRecordType::PageWrite:
             disk.RecoveryWritePage(*record.GetPageId(), *record.GetAfterImage());
@@ -121,6 +121,62 @@ RecoveryAnalysis RecoveryManager::Analyze(const LogManager& log_manager) {
     return analysis;
 }
 
+RecoveryRedoResult RecoveryManager::Redo(DiskManager& disk,
+                                         const LogManager& log_manager,
+                                         const RecoveryAnalysis& analysis) {
+    RecoveryRedoResult result;
+    if (!analysis.redo_start_lsn) { return result; }
+    const auto& records = log_manager.GetRecords();
+    for (const auto& record : records) {
+        if (record.GetLsn() < *analysis.redo_start_lsn || !record.GetPageId()) { continue; }
+        ++result.examined;
+        const auto page_id = *record.GetPageId();
+        const auto dirty = analysis.dirty_page_table.find(page_id);
+        if (dirty == analysis.dirty_page_table.end() || record.GetLsn() < dirty->second) {
+            ++result.skipped_by_dpt;
+            continue;
+        }
+        std::optional<lsn_t> page_lsn;
+        if (page_id >= 0 && page_id < disk.GetPageCount() && disk.IsPageAllocated(page_id)) {
+            page_lsn = disk.GetPageLsn(page_id);
+        }
+        if (page_lsn && *page_lsn >= record.GetLsn()) {
+            ++result.skipped_by_page_lsn;
+            continue;
+        }
+        switch (record.GetType()) {
+            case LogRecordType::PageWrite:
+                disk.RecoveryWritePage(page_id, *record.GetAfterImage(), record.GetLsn());
+                break;
+            case LogRecordType::PageAllocate:
+                disk.RecoveryWritePage(page_id, Page{}, record.GetLsn());
+                result.page_states[page_id] = true;
+                break;
+            case LogRecordType::PageFree:
+                if (page_id >= disk.GetPageCount()) {
+                    throw std::runtime_error("Redo PAGE_FREE references a missing page");
+                }
+                disk.SetPageLsn(page_id, record.GetLsn());
+                result.page_states[page_id] = false;
+                break;
+            case LogRecordType::Compensation:
+                disk.RecoveryWritePage(page_id, *record.GetAfterImage(), record.GetLsn());
+                if (*record.GetCompensationType() == CompensationType::PageAllocate) {
+                    result.page_states[page_id] = false;
+                } else if (*record.GetCompensationType() == CompensationType::PageFree) {
+                    result.page_states[page_id] = true;
+                }
+                break;
+            case LogRecordType::Begin:
+            case LogRecordType::Commit:
+            case LogRecordType::Abort:
+                throw std::logic_error("Analysis DPT contains a non-page WAL record");
+        }
+        ++result.redone;
+    }
+    return result;
+}
+
 std::map<page_id_t, bool> RecoveryManager::Recover(
     DiskManager& disk, LogManager& log_manager) {
     const auto records = log_manager.GetRecords();
@@ -166,7 +222,7 @@ std::map<page_id_t, bool> RecoveryManager::Recover(
                      });
     for (const auto* unit : replay_order) {
         if (unit->state == UnitState::Committed) {
-            for (const auto index : unit->records) { Redo(disk, records[index], page_states); }
+            for (const auto index : unit->records) { LegacyRedo(disk, records[index], page_states); }
         } else {
             for (auto position = unit->records.size(); position > 0; --position) {
                 Undo(disk, records[unit->records[position - 1]], page_states);

@@ -28,9 +28,19 @@ struct RecoveryAnalysis {
     timestamp_t maximum_commit_timestamp = 0;
 };
 
+struct RecoveryRedoResult {
+    std::size_t examined = 0;
+    std::size_t redone = 0;
+    std::size_t skipped_by_dpt = 0;
+    std::size_t skipped_by_page_lsn = 0;
+    std::map<page_id_t, bool> page_states;
+};
+
 class RecoveryManager {
 public:
     static RecoveryAnalysis Analyze(const LogManager& log_manager);
+    static RecoveryRedoResult Redo(DiskManager& disk, const LogManager& log_manager,
+                                   const RecoveryAnalysis& analysis);
     // Replays committed transactions and reverses aborted/incomplete transactions.
     static std::map<page_id_t, bool> Recover(
         DiskManager& disk, LogManager& log_manager);
