@@ -128,8 +128,8 @@ bool Matches(const BoundExpressionPtr& predicate, const Tuple& tuple) {
 }
 
 TransactionManager* SnapshotVersions(const ExecutionContext* context) {
-    if (context == nullptr || context->GetTransaction().GetIsolationLevel() !=
-                                  IsolationLevel::SnapshotIsolation) {
+    if (context == nullptr || context->GetTransaction().GetIsolationLevel() ==
+                                  IsolationLevel::RepeatableRead) {
         return nullptr;
     }
     auto* versions = context->GetTransactionManager();
@@ -181,8 +181,8 @@ std::optional<Tuple> ReadTuple(const TableHeap& heap, RID rid, const Schema& sch
                                const ExecutionContext* context) {
     auto record = heap.GetRecord(rid);
     const auto meta = heap.GetTupleMeta(rid);
-    if (context && context->GetTransaction().GetIsolationLevel() ==
-                       IsolationLevel::SnapshotIsolation) {
+    if (context && context->GetTransaction().GetIsolationLevel() !=
+                       IsolationLevel::RepeatableRead) {
         auto* versions = context->GetTransactionManager();
         if (versions == nullptr) {
             throw std::logic_error("Snapshot read requires a TransactionManager");
@@ -246,15 +246,10 @@ public:
     void LockTable(table_id_t id, LockMode mode) {
         if (locks_ == nullptr) { return; }
         if (mode == LockMode::Shared &&
-            transaction_.GetIsolationLevel() == IsolationLevel::SnapshotIsolation) {
+            transaction_.GetIsolationLevel() != IsolationLevel::RepeatableRead) {
             return;
         }
-        const bool release = mode == LockMode::Shared &&
-            transaction_.GetIsolationLevel() == IsolationLevel::ReadCommitted &&
-            transaction_.GetSharedTableLocks().count(id) == 0 &&
-            transaction_.GetExclusiveTableLocks().count(id) == 0;
         locks_->LockTable(transaction_, mode, id);
-        if (release) { release_tables_.push_back(id); }
     }
 
 private:
@@ -478,8 +473,8 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
             ExecutionResult result{PlanType::IndexOnlyScan};
             result.output_schema = output;
             if (ReachedLimit(scan.GetLimit(), 0)) { return result; }
-            if (context && context->GetTransaction().GetIsolationLevel() ==
-                               IsolationLevel::SnapshotIsolation) {
+            if (context && context->GetTransaction().GetIsolationLevel() !=
+                               IsolationLevel::RepeatableRead) {
                 struct CoveringCandidate {
                     IndexKey key;
                     RID rid;

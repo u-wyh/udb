@@ -600,3 +600,11 @@
 - 测试结果：全新构建无警告，73 / 73 测试及 ASan / UBSan 通过，覆盖跨进程 checkpoint/reopen、WAL 回收、Vacuum、索引一致性、时间戳单调性和旧 metadata 兼容，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 74：MVCC READ COMMITTED。
+
+## 阶段 74：MVCC READ COMMITTED
+
+- 做了什么：让 READ COMMITTED 在每条 statement 开始时刷新 MVCC snapshot，并移除普通读取共享锁依赖。
+- 关键设计：TransactionManager 原子更新 active read timestamp 与 watermark；所有扫描路径统一按当前 statement read_ts 重建可见版本；写锁语义保持不变。
+- 测试结果：全新构建无警告，74 / 74 测试及 ASan / UBSan 通过，覆盖 non-repeatable read、dirty read 防护、无共享锁及 Seq/Index/Range 路径一致性，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 75：MVCC REPEATABLE READ。

@@ -94,6 +94,16 @@ Transaction& TransactionManager::Begin(IsolationLevel isolation_level) {
     }
 }
 
+void TransactionManager::RefreshReadTimestamp(Transaction& transaction) {
+    auto& managed = RequireManaged(transaction);
+    if (!managed.IsActive()) { throw std::logic_error("Transaction is not active"); }
+    if (managed.GetIsolationLevel() != IsolationLevel::ReadCommitted) { return; }
+    const std::lock_guard<std::mutex> lock(timestamp_mutex_);
+    UnregisterReadTimestamp(managed.read_ts_);
+    managed.read_ts_ = last_commit_ts_;
+    RegisterReadTimestamp(managed.read_ts_);
+}
+
 timestamp_t TransactionManager::EncodeTransactionTimestamp(transaction_id_t transaction_id) {
     if (transaction_id >= kTransactionTimestampBit) {
         throw std::overflow_error("Transaction ID cannot be encoded as a tuple timestamp");

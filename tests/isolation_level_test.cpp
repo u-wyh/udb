@@ -57,29 +57,14 @@ void TestReadCommitted(Catalog& catalog) {
 void TestDirtyReadPrevention(Catalog& catalog) {
     SqlEngine writer(catalog, IsolationLevel::ReadCommitted);
     SqlEngine reader(catalog, IsolationLevel::ReadCommitted);
-    const auto writer_id = writer.ExecuteSQL("BEGIN").transaction_id.value();
+    writer.ExecuteSQL("BEGIN");
     writer.ExecuteSQL("UPDATE t SET value = 99 WHERE id = 1");
     const auto reader_id = reader.ExecuteSQL("BEGIN").transaction_id.value();
-
-    std::atomic<bool> completed = false;
-    std::atomic<bool> failed = false;
-    std::int32_t observed = -1;
-    std::thread blocked([&] {
-        try {
-            observed = ReadValue(reader);
-            completed = true;
-        } catch (...) { failed = true; }
-    });
-    WaitUntil([&] {
-        const auto graph = catalog.GetLockManager().GetWaitsForGraph();
-        const auto found = graph.find(reader_id);
-        return found != graph.end() && found->second.count(writer_id) == 1;
-    }, "READ COMMITTED reader did not wait for an uncommitted writer");
-    Check(!completed && !failed, "READ COMMITTED exposed a dirty value");
+    Check(ReadValue(reader) == 20, "READ COMMITTED exposed a dirty value");
+    Check(catalog.GetTransactionManager().GetTransaction(reader_id).GetSharedTableLocks().empty(),
+          "MVCC READ COMMITTED acquired a shared table lock");
     writer.ExecuteSQL("ROLLBACK");
-    blocked.join();
-    Check(completed && !failed && observed == 20,
-          "READ COMMITTED did not read the rolled-back committed value");
+    Check(ReadValue(reader) == 20, "READ COMMITTED changed after writer rollback");
     reader.ExecuteSQL("COMMIT");
 }
 

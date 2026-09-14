@@ -97,6 +97,7 @@ ExecutionResult SqlEngine::ExecuteSQL(std::string_view sql) {
     const bool autocommit = current_transaction_ == nullptr;
     auto* transaction = autocommit ? &transaction_manager_.Begin(default_isolation_)
                                    : current_transaction_;
+    transaction_manager_.RefreshReadTimestamp(*transaction);
     ExecutionContext context(*transaction, catalog_.GetLockManager(), transaction_manager_);
     try {
         auto result = executor_.Execute(*plan, context);
@@ -120,6 +121,9 @@ void SqlEngine::SetDefaultIsolationLevel(IsolationLevel isolation_level) {
 }
 
 ExecutionResult SqlEngine::ExecuteSQL(std::string_view sql, ExecutionContext& context) {
+    if (auto* manager = context.GetTransactionManager()) {
+        manager->RefreshReadTimestamp(context.GetTransaction());
+    }
     const auto statement = Parser::Parse(sql);
     const auto bound = Binder(catalog_).Bind(statement);
     const auto plan = Planner::Plan(bound, catalog_);

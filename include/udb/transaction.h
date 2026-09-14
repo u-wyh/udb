@@ -134,6 +134,8 @@ public:
         : pool_(pool), log_manager_(log_manager), lock_manager_(lock_manager) {}
     ~TransactionManager();
     Transaction& Begin(IsolationLevel isolation_level = IsolationLevel::RepeatableRead);
+    // READ COMMITTED takes a fresh MVCC snapshot at each statement boundary.
+    void RefreshReadTimestamp(Transaction& transaction);
     void Commit(Transaction& transaction);
     void Abort(Transaction& transaction, const std::function<void()>& before_unlock = {});
     Transaction& GetTransaction(transaction_id_t id);
