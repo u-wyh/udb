@@ -187,6 +187,15 @@ std::optional<lsn_t> DiskManager::GetPageLsn(page_id_t page_id) const {
     return page_lsns_.at(static_cast<std::size_t>(page_id));
 }
 
+std::optional<lsn_t> DiskManager::GetMaximumPageLsn() const {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    std::optional<lsn_t> maximum;
+    for (const auto page_lsn : page_lsns_) {
+        if (page_lsn && (!maximum || *page_lsn > *maximum)) { maximum = page_lsn; }
+    }
+    return maximum;
+}
+
 void DiskManager::SetPageLsn(page_id_t page_id, lsn_t page_lsn) {
     const std::lock_guard<std::mutex> lock(mutex_);
     if (!IsPageAllocatedUnlocked(page_id)) { throw std::out_of_range("Page ID is not allocated"); }

@@ -36,12 +36,21 @@ struct RecoveryRedoResult {
     std::map<page_id_t, bool> page_states;
 };
 
+struct RecoveryUndoResult {
+    std::size_t undone = 0;
+    std::size_t compensation_records = 0;
+    std::size_t completed_transactions = 0;
+    std::map<page_id_t, bool> page_states;
+};
+
 class RecoveryManager {
 public:
     static RecoveryAnalysis Analyze(const LogManager& log_manager);
     static RecoveryRedoResult Redo(DiskManager& disk, const LogManager& log_manager,
                                    const RecoveryAnalysis& analysis);
-    // Replays committed transactions and reverses aborted/incomplete transactions.
+    static RecoveryUndoResult Undo(DiskManager& disk, LogManager& log_manager,
+                                   const RecoveryAnalysis& analysis);
+    // Repeats history and reverses incomplete transactions with durable CLRs.
     static std::map<page_id_t, bool> Recover(
         DiskManager& disk, LogManager& log_manager);
 };

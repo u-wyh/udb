@@ -720,3 +720,11 @@
 - 测试结果：全新构建无警告，88 / 88 测试及 ASan / UBSan 通过，覆盖 write/allocate/free、pageLSN skip 与重复 redo 幂等，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 89：ARIES Undo Pass。
+
+## 阶段 89：ARIES Undo Pass
+
+- 做了什么：实现按最大 LSN 优先的 loser transaction Undo，并为恢复及正常回滚写入 durable CLR。
+- 关键设计：CLR 保存 full-page compensation image 与 undoNextLSN；Undo 完成后写 ABORT；WAL reset 通过版本化 sequence sidecar 保持 LSN 单调。
+- 测试结果：全新构建无警告，89 / 89 测试及 ASan / UBSan 通过，覆盖多 loser、write/allocate/free、completed abort 与重复恢复，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 90：Crash During Recovery。

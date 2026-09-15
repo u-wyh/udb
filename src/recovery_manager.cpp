@@ -2,69 +2,9 @@
 
 #include <algorithm>
 #include <stdexcept>
-#include <unordered_map>
+#include <queue>
 
 namespace udb {
-namespace {
-
-enum class UnitState { Active, Committed, Aborted };
-
-struct Unit {
-    transaction_id_t id;
-    UnitState state = UnitState::Active;
-    std::vector<std::size_t> records;
-};
-
-void LegacyRedo(DiskManager& disk, const LogRecord& record,
-                std::map<page_id_t, bool>& states) {
-    switch (record.GetType()) {
-        case LogRecordType::PageWrite:
-            disk.RecoveryWritePage(*record.GetPageId(), *record.GetAfterImage());
-            break;
-        case LogRecordType::PageAllocate:
-            disk.RecoveryWritePage(*record.GetPageId(), Page{});
-            states[*record.GetPageId()] = true;
-            break;
-        case LogRecordType::PageFree:
-            states[*record.GetPageId()] = false;
-            break;
-        case LogRecordType::Compensation:
-            disk.RecoveryWritePage(*record.GetPageId(), *record.GetAfterImage());
-            if (*record.GetCompensationType() == CompensationType::PageAllocate) {
-                states[*record.GetPageId()] = false;
-            } else if (*record.GetCompensationType() == CompensationType::PageFree) {
-                states[*record.GetPageId()] = true;
-            }
-            break;
-        case LogRecordType::Begin:
-        case LogRecordType::Commit:
-        case LogRecordType::Abort: break;
-    }
-}
-
-void Undo(DiskManager& disk, const LogRecord& record,
-          std::map<page_id_t, bool>& states) {
-    switch (record.GetType()) {
-        case LogRecordType::PageWrite:
-            disk.RecoveryWritePage(*record.GetPageId(), *record.GetBeforeImage());
-            break;
-        case LogRecordType::PageAllocate:
-            states[*record.GetPageId()] = false;
-            break;
-        case LogRecordType::PageFree:
-            disk.RecoveryWritePage(*record.GetPageId(), *record.GetBeforeImage());
-            states[*record.GetPageId()] = true;
-            break;
-        case LogRecordType::Compensation:
-            break;
-        case LogRecordType::Begin:
-        case LogRecordType::Commit:
-        case LogRecordType::Abort: break;
-    }
-}
-
-}  // namespace
-
 RecoveryAnalysis RecoveryManager::Analyze(const LogManager& log_manager) {
     RecoveryAnalysis analysis;
     std::map<transaction_id_t, lsn_t> active_last_lsns;
@@ -131,6 +71,17 @@ RecoveryRedoResult RecoveryManager::Redo(DiskManager& disk,
         if (record.GetLsn() < *analysis.redo_start_lsn || !record.GetPageId()) { continue; }
         ++result.examined;
         const auto page_id = *record.GetPageId();
+        if (record.GetType() == LogRecordType::PageAllocate) {
+            result.page_states[page_id] = true;
+        } else if (record.GetType() == LogRecordType::PageFree) {
+            result.page_states[page_id] = false;
+        } else if (record.GetType() == LogRecordType::Compensation) {
+            if (*record.GetCompensationType() == CompensationType::PageAllocate) {
+                result.page_states[page_id] = false;
+            } else if (*record.GetCompensationType() == CompensationType::PageFree) {
+                result.page_states[page_id] = true;
+            }
+        }
         const auto dirty = analysis.dirty_page_table.find(page_id);
         if (dirty == analysis.dirty_page_table.end() || record.GetLsn() < dirty->second) {
             ++result.skipped_by_dpt;
@@ -150,22 +101,18 @@ RecoveryRedoResult RecoveryManager::Redo(DiskManager& disk,
                 break;
             case LogRecordType::PageAllocate:
                 disk.RecoveryWritePage(page_id, Page{}, record.GetLsn());
-                result.page_states[page_id] = true;
                 break;
             case LogRecordType::PageFree:
                 if (page_id >= disk.GetPageCount()) {
                     throw std::runtime_error("Redo PAGE_FREE references a missing page");
                 }
-                disk.SetPageLsn(page_id, record.GetLsn());
-                result.page_states[page_id] = false;
+                // Recovery may start from metadata that already marks this page
+                // free. Install a physical image so its pageLSN can still advance;
+                // the allocation state is applied after all recovery passes.
+                disk.RecoveryWritePage(page_id, Page{}, record.GetLsn());
                 break;
             case LogRecordType::Compensation:
                 disk.RecoveryWritePage(page_id, *record.GetAfterImage(), record.GetLsn());
-                if (*record.GetCompensationType() == CompensationType::PageAllocate) {
-                    result.page_states[page_id] = false;
-                } else if (*record.GetCompensationType() == CompensationType::PageFree) {
-                    result.page_states[page_id] = true;
-                }
                 break;
             case LogRecordType::Begin:
             case LogRecordType::Commit:
@@ -177,68 +124,79 @@ RecoveryRedoResult RecoveryManager::Redo(DiskManager& disk,
     return result;
 }
 
+RecoveryUndoResult RecoveryManager::Undo(DiskManager& disk, LogManager& log_manager,
+                                         const RecoveryAnalysis& analysis) {
+    RecoveryUndoResult result;
+    std::map<lsn_t, LogRecord> records;
+    for (const auto& record : log_manager.GetRecords()) {
+        records.emplace(record.GetLsn(), record);
+    }
+    using Work = std::pair<lsn_t, transaction_id_t>;
+    std::priority_queue<Work> work;
+    for (const auto id : analysis.losers) {
+        work.emplace(analysis.transaction_table.at(id).last_lsn, id);
+    }
+    while (!work.empty()) {
+        const auto [lsn, transaction_id] = work.top();
+        work.pop();
+        const auto found = records.find(lsn);
+        if (found == records.end() || found->second.GetTransactionId() != transaction_id) {
+            throw std::runtime_error("Broken WAL transaction chain during Undo");
+        }
+        const auto record = found->second;
+        std::optional<lsn_t> next = record.GetPrevLsn();
+        if (record.GetType() == LogRecordType::Compensation) {
+            next = record.GetUndoNextLsn();
+        } else if (record.GetType() == LogRecordType::PageWrite ||
+                   record.GetType() == LogRecordType::PageAllocate ||
+                   record.GetType() == LogRecordType::PageFree) {
+            const auto page_id = *record.GetPageId();
+            Page image;
+            CompensationType action;
+            if (record.GetType() == LogRecordType::PageWrite) {
+                image = *record.GetBeforeImage();
+                action = CompensationType::PageWrite;
+            } else if (record.GetType() == LogRecordType::PageAllocate) {
+                image = Page{};
+                action = CompensationType::PageAllocate;
+            } else {
+                image = *record.GetBeforeImage();
+                action = CompensationType::PageFree;
+            }
+            const auto clr_lsn = log_manager.Append(LogRecord::Compensation(
+                transaction_id, page_id, action, image, next));
+            log_manager.Flush();
+            disk.RecoveryWritePage(page_id, image, clr_lsn);
+            if (action == CompensationType::PageAllocate) {
+                result.page_states[page_id] = false;
+            } else if (action == CompensationType::PageFree) {
+                result.page_states[page_id] = true;
+            }
+            ++result.undone;
+            ++result.compensation_records;
+        } else if (record.GetType() == LogRecordType::Begin) {
+            log_manager.Append(LogRecord::Abort(transaction_id));
+            log_manager.Flush();
+            ++result.completed_transactions;
+            next.reset();
+        } else {
+            throw std::runtime_error("Undo encountered a completed transaction record");
+        }
+        if (next) { work.emplace(*next, transaction_id); }
+    }
+    return result;
+}
+
 std::map<page_id_t, bool> RecoveryManager::Recover(
     DiskManager& disk, LogManager& log_manager) {
-    const auto records = log_manager.GetRecords();
-    timestamp_t recovered_commit_timestamp = 0;
-    std::vector<Unit> units;
-    std::unordered_map<transaction_id_t, std::size_t> active;
-    for (std::size_t i = 0; i < records.size(); ++i) {
-        const auto& record = records[i];
-        const auto id = record.GetTransactionId();
-        if (record.GetType() == LogRecordType::Begin) {
-            if (active.count(id) != 0) { throw std::runtime_error("Nested WAL transaction ID"); }
-            units.push_back(Unit{id, UnitState::Active, {}});
-            active[id] = units.size() - 1;
-        }
-        const auto found = active.find(id);
-        if (found == active.end()) { throw std::runtime_error("WAL record has no active transaction"); }
-        units[found->second].records.push_back(i);
-        if (record.GetType() == LogRecordType::Commit ||
-            record.GetType() == LogRecordType::Abort) {
-            units[found->second].state = record.GetType() == LogRecordType::Commit
-                                                ? UnitState::Committed : UnitState::Aborted;
-            active.erase(found);
-            if (record.GetType() == LogRecordType::Commit && record.GetCommitTimestamp()) {
-                recovered_commit_timestamp = std::max(recovered_commit_timestamp,
-                                                      *record.GetCommitTimestamp());
-            }
-        }
+    const auto analysis = Analyze(log_manager);
+    auto redo = Redo(disk, log_manager, analysis);
+    auto undo = Undo(disk, log_manager, analysis);
+    for (const auto& [page_id, allocated] : undo.page_states) {
+        redo.page_states.insert_or_assign(page_id, allocated);
     }
-
-    std::map<page_id_t, bool> page_states;
-    // Strict 2PL serializes conflicting page writers by transaction end, which
-    // can differ from BEGIN order when sessions run concurrently. Replay ended
-    // units by their terminal WAL position; active losers follow all ended work.
-    std::vector<const Unit*> replay_order;
-    replay_order.reserve(units.size());
-    for (const auto& unit : units) { replay_order.push_back(&unit); }
-    std::stable_sort(replay_order.begin(), replay_order.end(),
-                     [](const Unit* left, const Unit* right) {
-                         const bool left_active = left->state == UnitState::Active;
-                         const bool right_active = right->state == UnitState::Active;
-                         if (left_active != right_active) { return !left_active; }
-                         return left->records.back() < right->records.back();
-                     });
-    for (const auto* unit : replay_order) {
-        if (unit->state == UnitState::Committed) {
-            for (const auto index : unit->records) { LegacyRedo(disk, records[index], page_states); }
-        } else {
-            for (auto position = unit->records.size(); position > 0; --position) {
-                Undo(disk, records[unit->records[position - 1]], page_states);
-            }
-        }
-    }
-    bool appended_abort = false;
-    for (const auto& unit : units) {
-        if (unit.state == UnitState::Active) {
-            log_manager.Append(LogRecord::Abort(unit.id));
-            appended_abort = true;
-        }
-    }
-    if (appended_abort) { log_manager.Flush(); }
-    TransactionManager::RestoreLastCommitTimestamp(recovered_commit_timestamp);
-    return page_states;
+    TransactionManager::RestoreLastCommitTimestamp(analysis.maximum_commit_timestamp);
+    return redo.page_states;
 }
 
 }  // namespace udb

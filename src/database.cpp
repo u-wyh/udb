@@ -140,14 +140,23 @@ Database::Database(const std::filesystem::path& path, std::size_t capacity)
       wal_path_(WalPath(path)), log_manager_(std::make_unique<LogManager>(wal_path_)),
       disk_(std::make_unique<DiskManager>(path)),
       pool_(std::make_unique<BufferPoolManager>(*disk_, capacity, log_manager_.get())),
-      catalog_(std::make_unique<Catalog>(*pool_, log_manager_.get())) {}
+      catalog_(std::make_unique<Catalog>(*pool_, log_manager_.get())) {
+    if (const auto maximum = disk_->GetMaximumPageLsn()) {
+        if (*maximum == std::numeric_limits<lsn_t>::max()) {
+            throw std::overflow_error("Persistent page LSN limit reached");
+        }
+        log_manager_->EnsureNextLsn(*maximum + 1);
+    }
+}
 
 std::unique_ptr<Database> Database::Create(const std::filesystem::path& path, std::size_t capacity) {
     const auto metadata = MetadataPath(path);
     const auto wal = WalPath(path);
     const auto page_lsns = DiskManager::GetPageLsnPath(path);
+    const auto wal_sequence = LogManager::GetSequencePath(wal);
     if (capacity == 0) { throw std::invalid_argument("Buffer pool capacity must be positive"); }
     if (Exists(path) || Exists(metadata) || Exists(wal) || Exists(page_lsns) ||
+        Exists(wal_sequence) ||
         Exists(TemporaryPath(metadata))) {
         throw std::runtime_error("Database files already exist");
     }
@@ -161,6 +170,7 @@ std::unique_ptr<Database> Database::Create(const std::filesystem::path& path, st
         std::filesystem::remove(path, error);
         std::filesystem::remove(wal, error);
         std::filesystem::remove(page_lsns, error);
+        std::filesystem::remove(wal_sequence, error);
         throw;
     }
 }

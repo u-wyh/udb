@@ -87,6 +87,7 @@ private:
 class LogManager {
 public:
     explicit LogManager(const std::filesystem::path& path);
+    static std::filesystem::path GetSequencePath(const std::filesystem::path& wal_path);
     LogManager(const LogManager&) = delete;
     LogManager& operator=(const LogManager&) = delete;
 
@@ -98,16 +99,19 @@ public:
     const std::vector<LogRecord>& GetRecords() const { return records_; }
     lsn_t GetNextLsn() const;
     std::optional<lsn_t> GetPersistentLsn() const;
+    void EnsureNextLsn(lsn_t minimum);
     const std::filesystem::path& GetPath() const { return path_; }
 
 private:
     std::filesystem::path path_;
+    std::filesystem::path sequence_path_;
     std::ofstream output_;
     std::vector<LogRecord> records_;
     lsn_t next_lsn_ = 0;
     std::optional<lsn_t> persistent_lsn_;
     std::map<transaction_id_t, lsn_t> transaction_last_lsns_;
     mutable std::recursive_mutex mutex_;
+    void PersistSequenceFloor();
 };
 
 }  // namespace udb

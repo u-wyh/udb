@@ -37,6 +37,7 @@ public:
                    std::optional<lsn_t> page_lsn = std::nullopt);
     Page ReadPage(page_id_t page_id);
     std::optional<lsn_t> GetPageLsn(page_id_t page_id) const;
+    std::optional<lsn_t> GetMaximumPageLsn() const;
     void SetPageLsn(page_id_t page_id, lsn_t page_lsn);
     // Makes all prior data-file writes durable.
     void Sync();

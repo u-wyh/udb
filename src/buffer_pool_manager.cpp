@@ -400,16 +400,28 @@ void BufferPoolManager::RollbackTransaction(Transaction& transaction) {
     write_error_ = nullptr;
     if (log_manager_ != nullptr) { log_manager_->Flush(); }
 
+    const auto compensate = [&](page_id_t page_id, CompensationType action,
+                                const Page& image) -> std::optional<lsn_t> {
+        if (log_manager_ == nullptr) { return std::nullopt; }
+        transaction.last_lsn_ = log_manager_->Append(LogRecord::Compensation(
+            transaction.GetId(), page_id, action, image, std::nullopt));
+        log_manager_->Flush();
+        return transaction.last_lsn_;
+    };
+
     for (const auto page_id : transaction.allocated_pages_) {
+        compensate(page_id, CompensationType::PageAllocate, Page{});
         if (disk_.IsPageAllocated(page_id) && !DeletePageLocked(page_id)) {
             throw std::logic_error("Allocated transaction page is still pinned");
         }
     }
     for (const auto& [page_id, page] : transaction.freed_pages_) {
+        const auto clr_lsn = compensate(page_id, CompensationType::PageFree, page);
         if (disk_.IsPageAllocated(page_id)) {
-            disk_.WritePage(page_id, page);
+            disk_.WritePage(page_id, page, clr_lsn);
         } else {
             disk_.RestorePage(page_id, page);
+            if (clr_lsn) { disk_.SetPageLsn(page_id, *clr_lsn); }
         }
         const auto found = page_table_.find(page_id);
         if (found != page_table_.end()) {
@@ -422,7 +434,8 @@ void BufferPoolManager::RollbackTransaction(Transaction& transaction) {
         }
     }
     for (const auto& [page_id, page] : transaction.before_images_) {
-        disk_.WritePage(page_id, page);
+        const auto clr_lsn = compensate(page_id, CompensationType::PageWrite, page);
+        disk_.WritePage(page_id, page, clr_lsn);
         const auto found = page_table_.find(page_id);
         if (found != page_table_.end()) {
             auto& frame = frames_[found->second];

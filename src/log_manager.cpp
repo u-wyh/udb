@@ -35,6 +35,8 @@ constexpr std::uint32_t kVersion = 2;
 constexpr std::size_t kLegacyHeaderSize = 48;
 constexpr std::size_t kHeaderSize = 64;
 constexpr std::uint64_t kMissing = std::numeric_limits<std::uint64_t>::max();
+constexpr std::uint64_t kSequenceMagic = 0x31514553424455ULL;  // "UDBSEQ1"
+constexpr std::uint32_t kSequenceVersion = 1;
 
 void Write(std::vector<unsigned char>& bytes, std::uint64_t value, std::size_t width) {
     for (std::size_t i = 0; i < width; ++i) {
@@ -146,7 +148,7 @@ std::vector<LogRecord> Decode(const std::vector<unsigned char>& file,
                               std::size_t* valid_size) {
     std::vector<LogRecord> records;
     std::size_t position = 0;
-    lsn_t expected_lsn = 0;
+    std::optional<lsn_t> expected_lsn;
     std::map<transaction_id_t, lsn_t> transaction_last_lsns;
     while (position < file.size()) {
         if (file.size() - position < 12) { break; }
@@ -170,11 +172,13 @@ std::vector<LogRecord> Decode(const std::vector<unsigned char>& file,
         Overwrite(encoded, 16, 0, 4);
         if (Checksum(encoded) != stored_checksum) { throw std::runtime_error("WAL checksum mismatch"); }
         const auto lsn = Read(encoded, 24, 8);
-        if (lsn != expected_lsn) { throw std::runtime_error("Non-contiguous WAL LSN sequence"); }
-        if (expected_lsn == std::numeric_limits<lsn_t>::max()) {
+        if (expected_lsn && lsn != *expected_lsn) {
+            throw std::runtime_error("Non-contiguous WAL LSN sequence");
+        }
+        if (lsn == std::numeric_limits<lsn_t>::max()) {
             throw std::runtime_error("WAL LSN sequence overflow");
         }
-        ++expected_lsn;
+        expected_lsn = lsn + 1;
         const auto transaction_id = Read(encoded, 32, 8);
         const auto encoded_page_id = Read(encoded, 40, 8);
         std::optional<lsn_t> prev_lsn;
@@ -326,7 +330,8 @@ void LogRecord::Validate() const {
     throw std::invalid_argument("Unknown WAL record type");
 }
 
-LogManager::LogManager(const std::filesystem::path& path) : path_(path) {
+LogManager::LogManager(const std::filesystem::path& path)
+    : path_(path), sequence_path_(GetSequencePath(path)) {
     if (path.empty() || path.extension() != ".wal") {
         throw std::invalid_argument("WAL path must end in .wal");
     }
@@ -342,7 +347,16 @@ LogManager::LogManager(const std::filesystem::path& path) : path_(path) {
     std::size_t valid_size = 0;
     records_ = Decode(file, &valid_size);
     if (valid_size != file.size()) { std::filesystem::resize_file(path, valid_size); }
-    next_lsn_ = static_cast<lsn_t>(records_.size());
+    lsn_t sequence_floor = 0;
+    if (std::filesystem::exists(sequence_path_)) {
+        const auto sequence = ReadFile(sequence_path_);
+        if (sequence.size() != 24 || Read(sequence, 0, 8) != kSequenceMagic ||
+            Read(sequence, 8, 4) != kSequenceVersion) {
+            throw std::runtime_error("Unsupported WAL sequence sidecar format");
+        }
+        sequence_floor = Read(sequence, 16, 8);
+    }
+    next_lsn_ = records_.empty() ? sequence_floor : records_.back().GetLsn() + 1;
     if (!records_.empty()) { persistent_lsn_ = records_.back().GetLsn(); }
     for (const auto& record : records_) {
         if (record.GetType() == LogRecordType::Begin) {
@@ -356,6 +370,44 @@ LogManager::LogManager(const std::filesystem::path& path) : path_(path) {
     }
     output_.open(path, std::ios::binary | std::ios::app);
     if (!output_) { throw std::runtime_error("Cannot open WAL file"); }
+}
+
+std::filesystem::path LogManager::GetSequencePath(
+    const std::filesystem::path& wal_path) {
+    auto result = wal_path;
+    result += ".seq";
+    return result;
+}
+
+void LogManager::PersistSequenceFloor() {
+    std::vector<unsigned char> bytes;
+    Write(bytes, kSequenceMagic, 8);
+    Write(bytes, kSequenceVersion, 4);
+    Write(bytes, 0, 4);
+    Write(bytes, next_lsn_, 8);
+    std::ofstream output(sequence_path_, std::ios::binary | std::ios::trunc);
+    output.write(reinterpret_cast<const char*>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
+    output.close();
+    if (!output) { throw std::runtime_error("Cannot write WAL sequence sidecar"); }
+    const auto descriptor = ::open(sequence_path_.c_str(), O_RDONLY);
+    if (descriptor < 0) {
+        throw std::runtime_error("Cannot durably sync WAL sequence sidecar");
+    }
+    const auto sync_error = ::fsync(descriptor) != 0;
+    const auto close_error = ::close(descriptor) != 0;
+    if (sync_error || close_error) {
+        throw std::runtime_error("Cannot durably sync WAL sequence sidecar");
+    }
+}
+
+void LogManager::EnsureNextLsn(lsn_t minimum) {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (!records_.empty()) { return; }
+    if (minimum > next_lsn_) {
+        next_lsn_ = minimum;
+        PersistSequenceFloor();
+    }
 }
 
 lsn_t LogManager::Append(LogRecord record) {
@@ -442,7 +494,7 @@ void LogManager::Reset() {
     if (!output_) { throw std::runtime_error("Cannot reopen reset WAL"); }
     records_.clear();
     transaction_last_lsns_.clear();
-    next_lsn_ = 0;
+    PersistSequenceFloor();
     persistent_lsn_.reset();
     Flush();
 }
