@@ -752,3 +752,11 @@
 - 测试结果：全新构建无警告，92 / 92 测试及 ASan / UBSan 通过，覆盖交错事务、安全边界、截断后 loser undo 与 LSN 单调，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 93：ARIES + MVCC + SSI Stress。
+
+## 阶段 93：ARIES + MVCC + SSI Stress
+
+- 做了什么：新增 ARIES、MVCC、SSI、索引、fuzzy checkpoint 与 WAL 生命周期的并发恢复综合压力测试。
+- 关键设计：重复模拟 redo/undo 中二次崩溃、truncated WAL 与多次 reopen；同时校验 tuple/index、timestamp、Vacuum 和 SSI abort。
+- 测试结果：压力场景额外连续 5 次通过；全新构建无警告，93 / 93 测试及 ASan / UBSan 通过，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：STOP；重新评审 SQL 完整性、存储性能与后续高级功能路线。
