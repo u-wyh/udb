@@ -192,8 +192,10 @@ void LockManager::LockTableLocked(std::unique_lock<std::mutex>& lock, Transactio
         request->mode = LockMode::Exclusive;
         request->upgrading = false;
         queue->upgrader = nullptr;
-        transaction.shared_table_locks_.erase(table_id);
-        transaction.exclusive_table_locks_.insert(table_id);
+        if (table_id != kCatalogSchemaLockId) {
+            transaction.shared_table_locks_.erase(table_id);
+            transaction.exclusive_table_locks_.insert(table_id);
+        }
         queue->condition.notify_all();
         return;
     }
@@ -209,8 +211,10 @@ void LockManager::LockTableLocked(std::unique_lock<std::mutex>& lock, Transactio
         throw DeadlockError();
     }
     request->granted = true;
-    if (mode == LockMode::Shared) { transaction.shared_table_locks_.insert(table_id); }
-    else { transaction.exclusive_table_locks_.insert(table_id); }
+    if (table_id != kCatalogSchemaLockId) {
+        if (mode == LockMode::Shared) { transaction.shared_table_locks_.insert(table_id); }
+        else { transaction.exclusive_table_locks_.insert(table_id); }
+    }
     queue->condition.notify_all();
 }
 

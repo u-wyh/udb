@@ -785,3 +785,12 @@
 - 测试结果：全新构建无警告，96 / 96 测试及 ASan / UBSan 通过，覆盖 CREATE/DROP commit、rollback 与 crash recovery，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 97：Transactional DDL。
+
+
+## 阶段 97：Transactional DDL
+
+- 做了什么：显式事务支持 CREATE/DROP TABLE 与 CREATE/DROP INDEX，并在 commit、rollback 和 reopen 后保持 catalog 正确。
+- 关键设计：绑定前取得事务生命周期的粗粒度 catalog schema S/X 锁；DDL 继续复用事务化 catalog 与 WAL / ARIES 路径。
+- 测试结果：全新构建无警告，97 / 97 测试及 ASan / UBSan 通过，覆盖四类 DDL、回滚、重开和并发 schema 可见性，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 98：Column Constraints。

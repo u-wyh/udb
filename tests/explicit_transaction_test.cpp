@@ -117,10 +117,10 @@ void TestSqlTransactions(const std::filesystem::path& path) {
         tree.Validate();
 
         sql.ExecuteSQL("BEGIN");
-        Reject([&] { sql.ExecuteSQL("CREATE TABLE forbidden (id INTEGER)"); });
-        Check(sql.HasActiveTransaction(), "Rejected DDL ended the explicit transaction");
+        sql.ExecuteSQL("CREATE TABLE rolled_back (id INTEGER)");
+        Check(sql.HasActiveTransaction(), "Transactional DDL ended the explicit transaction");
         sql.ExecuteSQL("ROLLBACK");
-        Reject([&] { static_cast<void>(catalog.GetTable("forbidden")); });
+        Reject([&] { static_cast<void>(catalog.GetTable("rolled_back")); });
         Reject([&] { sql.ExecuteSQL("COMMIT"); });
         Reject([&] { sql.ExecuteSQL("ROLLBACK"); });
 

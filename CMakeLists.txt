@@ -88,6 +88,10 @@ add_executable(udb_transactional_catalog_test tests/transactional_catalog_test.c
 target_link_libraries(udb_transactional_catalog_test PRIVATE udb_sql_engine)
 add_test(NAME transactional_catalog COMMAND udb_transactional_catalog_test)
 
+add_executable(udb_transactional_ddl_test tests/transactional_ddl_test.cpp)
+target_link_libraries(udb_transactional_ddl_test PRIVATE udb_sql_engine)
+add_test(NAME transactional_ddl COMMAND udb_transactional_ddl_test)
+
 add_executable(udb_sql_test tests/sql_test.cpp)
 target_link_libraries(udb_sql_test PRIVATE udb_sql)
 add_test(NAME sql COMMAND udb_sql_test)
@@ -439,6 +443,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(udb_system_catalog_test PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(udb_catalog_migration_test PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(udb_transactional_catalog_test PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(udb_transactional_ddl_test PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

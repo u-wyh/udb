@@ -3,6 +3,7 @@
 #include "udb/transaction.h"
 
 #include <condition_variable>
+#include <limits>
 #include <list>
 #include <map>
 #include <memory>
@@ -13,6 +14,9 @@
 namespace udb {
 
 enum class LockMode { Shared, Exclusive };
+
+inline constexpr table_id_t kCatalogSchemaLockId =
+    std::numeric_limits<table_id_t>::max();
 
 class DeadlockError : public std::runtime_error {
 public:

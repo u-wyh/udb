@@ -99,17 +99,18 @@ ExecutionResult SqlEngine::ExecuteSQL(std::string_view sql) {
     }
 
     const auto statement = Parser::Parse(sql);
-    if (current_transaction_ != nullptr && IsDdl(statement)) {
-        throw std::invalid_argument("DDL is not supported inside an explicit transaction");
-    }
-    const auto bound = Binder(catalog_).Bind(statement);
-    const auto plan = Planner::Plan(bound, catalog_);
+    const bool ddl = IsDdl(statement);
     const bool autocommit = current_transaction_ == nullptr;
     auto* transaction = autocommit ? &transaction_manager_.Begin(default_isolation_)
                                    : current_transaction_;
-    transaction_manager_.RefreshReadTimestamp(*transaction);
-    ExecutionContext context(*transaction, catalog_.GetLockManager(), transaction_manager_);
     try {
+        transaction_manager_.RefreshReadTimestamp(*transaction);
+        catalog_.GetLockManager().LockTable(
+            *transaction, ddl ? LockMode::Exclusive : LockMode::Shared,
+            kCatalogSchemaLockId);
+        const auto bound = Binder(catalog_).Bind(statement);
+        const auto plan = Planner::Plan(bound, catalog_);
+        ExecutionContext context(*transaction, catalog_.GetLockManager(), transaction_manager_);
         auto result = executor_.Execute(*plan, context);
         if (autocommit) {
             transaction_manager_.Commit(*transaction);
@@ -135,6 +136,11 @@ ExecutionResult SqlEngine::ExecuteSQL(std::string_view sql, ExecutionContext& co
         manager->RefreshReadTimestamp(context.GetTransaction());
     }
     const auto statement = Parser::Parse(sql);
+    if (auto* locks = context.GetLockManager()) {
+        locks->LockTable(context.GetTransaction(),
+                         IsDdl(statement) ? LockMode::Exclusive : LockMode::Shared,
+                         kCatalogSchemaLockId);
+    }
     const auto bound = Binder(catalog_).Bind(statement);
     const auto plan = Planner::Plan(bound, catalog_);
     return executor_.Execute(*plan, context);
