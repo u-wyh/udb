@@ -39,15 +39,23 @@ struct ColumnDefinition {
     bool unique = false;
 };
 
+struct ForeignKeyDefinition {
+    std::vector<std::string> column_names;
+    std::string referenced_table_name;
+    std::vector<std::string> referenced_column_names;
+};
+
 struct CreateTableStatement {
     CreateTableStatement() = default;
     CreateTableStatement(std::string name, std::vector<ColumnDefinition> definitions,
-                         std::vector<ExpressionPtr> constraints = {})
+                         std::vector<ExpressionPtr> constraints = {},
+                         std::vector<ForeignKeyDefinition> references = {})
         : table_name(std::move(name)), columns(std::move(definitions)),
-          checks(std::move(constraints)) {}
+          checks(std::move(constraints)), foreign_keys(std::move(references)) {}
     std::string table_name;
     std::vector<ColumnDefinition> columns;
     std::vector<ExpressionPtr> checks;
+    std::vector<ForeignKeyDefinition> foreign_keys;
 };
 
 struct CreateIndexStatement {

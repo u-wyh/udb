@@ -42,6 +42,9 @@ void CheckSchema(const Schema& planned, const Schema& actual) {
     if (planned.GetCheckExpressions() != actual.GetCheckExpressions()) {
         throw std::invalid_argument("Plan CHECK constraints do not match catalog");
     }
+    if (planned.GetForeignKeys() != actual.GetForeignKeys()) {
+        throw std::invalid_argument("Plan FOREIGN KEY constraints do not match catalog");
+    }
 }
 
 void CheckExpression(const BoundExpressionPtr& expression, const Schema& source) {
@@ -215,6 +218,87 @@ std::optional<Tuple> ReadTuple(const TableHeap& heap, RID rid, const Schema& sch
     return Tuple::Deserialize(record, schema);
 }
 
+bool ForeignKeyValuesMatch(const Tuple& source,
+                           const std::vector<std::size_t>& source_columns,
+                           const Tuple& target,
+                           const std::vector<std::size_t>& target_columns) {
+    for (std::size_t i = 0; i < source_columns.size(); ++i) {
+        const auto& left = source.GetValue(source_columns[i]);
+        const auto& right = target.GetValue(target_columns[i]);
+        if (left.IsNull() || right.IsNull() || left != right) { return false; }
+    }
+    return true;
+}
+
+void EnforceForeignKeys(const Catalog& catalog, const Schema& schema, const Tuple& tuple,
+                        const ExecutionContext* context) {
+    for (const auto& foreign_key : schema.GetForeignKeys()) {
+        const bool has_null = std::any_of(
+            foreign_key.column_indexes.begin(), foreign_key.column_indexes.end(),
+            [&](std::size_t column) { return tuple.GetValue(column).IsNull(); });
+        if (has_null) { continue; }
+        const auto& referenced = catalog.GetTable(foreign_key.referenced_table_id);
+        const auto& referenced_heap = catalog.GetTableHeap(foreign_key.referenced_table_id);
+        bool found = false;
+        for (auto rid = referenced_heap.GetFirstRID(); rid;
+             rid = referenced_heap.GetNextRID(*rid)) {
+            const auto target = ReadTuple(referenced_heap, *rid, referenced.GetSchema(), context);
+            if (target && ForeignKeyValuesMatch(tuple, foreign_key.column_indexes, *target,
+                                                foreign_key.referenced_column_indexes)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) { throw std::invalid_argument("FOREIGN KEY constraint failed"); }
+    }
+}
+
+bool HasForeignKeyReference(const Catalog& catalog, table_id_t child_id,
+                            const ForeignKeyConstraint& foreign_key, const Tuple& parent,
+                            const ExecutionContext* context) {
+    const auto& child = catalog.GetTable(child_id);
+    const auto& child_heap = catalog.GetTableHeap(child_id);
+    for (auto rid = child_heap.GetFirstRID(); rid; rid = child_heap.GetNextRID(*rid)) {
+        const auto tuple = ReadTuple(child_heap, *rid, child.GetSchema(), context);
+        if (tuple && ForeignKeyValuesMatch(*tuple, foreign_key.column_indexes, parent,
+                                           foreign_key.referenced_column_indexes)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void EnforceNoForeignKeyReferences(const Catalog& catalog, table_id_t parent_table_id,
+                                   const Tuple& parent, const ExecutionContext* context) {
+    for (const auto child_id : catalog.ListTables()) {
+        const auto& child = catalog.GetTable(child_id);
+        for (const auto& foreign_key : child.GetSchema().GetForeignKeys()) {
+            if (foreign_key.referenced_table_id != parent_table_id) { continue; }
+            if (HasForeignKeyReference(catalog, child_id, foreign_key, parent, context)) {
+                throw std::invalid_argument("FOREIGN KEY RESTRICT prevents row change");
+            }
+        }
+    }
+}
+
+void EnforceReferencedKeyUpdate(const Catalog& catalog, table_id_t parent_table_id,
+                                const Tuple& before, const Tuple& after,
+                                const ExecutionContext* context) {
+    for (const auto child_id : catalog.ListTables()) {
+        const auto& child = catalog.GetTable(child_id);
+        for (const auto& foreign_key : child.GetSchema().GetForeignKeys()) {
+            if (foreign_key.referenced_table_id != parent_table_id) { continue; }
+            bool changed = false;
+            for (const auto column : foreign_key.referenced_column_indexes) {
+                if (before.GetValue(column) != after.GetValue(column)) { changed = true; }
+            }
+            if (changed && HasForeignKeyReference(catalog, child_id, foreign_key, before, context)) {
+                throw std::invalid_argument("FOREIGN KEY RESTRICT prevents row update");
+            }
+        }
+    }
+}
+
 bool ReachedLimit(const std::optional<std::size_t>& limit, std::size_t row_count) {
     return limit && row_count >= *limit;
 }
@@ -277,14 +361,34 @@ void AcquireExecutionLocks(const PlanNode& plan, StatementLockGuard& locks,
     const auto lock_table = [&](table_id_t id, LockMode mode) { locks.LockTable(id, mode); };
     switch (plan.GetType()) {
         case PlanType::Insert:
-            lock_table(dynamic_cast<const InsertPlan&>(plan).GetTableId(), LockMode::Exclusive);
-            return;
         case PlanType::Delete:
-            lock_table(dynamic_cast<const DeletePlan&>(plan).GetTableId(), LockMode::Exclusive);
+        case PlanType::Update: {
+            table_id_t target = 0;
+            if (plan.GetType() == PlanType::Insert) {
+                target = dynamic_cast<const InsertPlan&>(plan).GetTableId();
+            } else if (plan.GetType() == PlanType::Delete) {
+                target = dynamic_cast<const DeletePlan&>(plan).GetTableId();
+            } else {
+                target = dynamic_cast<const UpdatePlan&>(plan).GetTableId();
+            }
+            std::map<table_id_t, LockMode> required{{target, LockMode::Exclusive}};
+            if (plan.GetType() == PlanType::Insert || plan.GetType() == PlanType::Update) {
+                for (const auto& foreign_key : catalog.GetTable(target).GetSchema().GetForeignKeys()) {
+                    required.emplace(foreign_key.referenced_table_id, LockMode::Shared);
+                }
+            }
+            if (plan.GetType() == PlanType::Delete || plan.GetType() == PlanType::Update) {
+                for (const auto table_id : catalog.ListTables()) {
+                    for (const auto& foreign_key : catalog.GetTable(table_id).GetSchema().GetForeignKeys()) {
+                        if (foreign_key.referenced_table_id == target && table_id != target) {
+                            required.emplace(table_id, LockMode::Shared);
+                        }
+                    }
+                }
+            }
+            for (const auto& [table_id, mode] : required) { lock_table(table_id, mode); }
             return;
-        case PlanType::Update:
-            lock_table(dynamic_cast<const UpdatePlan&>(plan).GetTableId(), LockMode::Exclusive);
-            return;
+        }
         case PlanType::SeqScan:
             lock_table(dynamic_cast<const SeqScanPlan&>(plan).GetTableId(), LockMode::Shared);
             return;
@@ -425,6 +529,7 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
             CheckSchema(insert.GetTableSchema(), schema);
             const Tuple tuple(schema, insert.GetValues());
             EnforceChecks(Binder(catalog_).BindChecks(schema), tuple);
+            EnforceForeignKeys(catalog_, schema, tuple, context);
             const auto record = tuple.Serialize(schema);
             std::vector<std::pair<index_id_t, IndexKey>> index_keys;
             for (const auto index_id : catalog_.GetTableIndexes(insert.GetTableId())) {
@@ -722,6 +827,7 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
                     remove = !value.IsNull() && value.GetBoolean();
                 }
                 if (!remove) { continue; }
+                EnforceNoForeignKeyReferences(catalog_, deletion.GetTableId(), *tuple, context);
                 DeleteMatch match{*rid, {}};
                 for (const auto index_id : table_indexes) {
                     const auto& index = catalog_.GetIndex(index_id);
@@ -826,6 +932,9 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
                 }
                 const Tuple replacement(source, std::move(values));
                 EnforceChecks(checks, replacement);
+                EnforceForeignKeys(catalog_, source, replacement, context);
+                EnforceReferencedKeyUpdate(catalog_, update.GetTableId(), tuple,
+                                           replacement, context);
                 Replacement pending{*rid, replacement.Serialize(source),
                                     heap.GetRecord(*rid), heap.GetTupleMeta(*rid), {}};
                 for (const auto index_id : table_indexes) {

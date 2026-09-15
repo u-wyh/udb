@@ -111,6 +111,32 @@ CreateTableStatement Parser::CreateTable() {
     statement.table_name = Take(TokenType::Identifier, "table name").text;
     Take(TokenType::LeftParen, "(");
     do {
+        if (IsWord(current_, "FOREIGN") && IsWord(next_, "KEY")) {
+            Take(TokenType::Identifier, "FOREIGN");
+            Take(TokenType::Identifier, "KEY");
+            ForeignKeyDefinition foreign_key;
+            Take(TokenType::LeftParen, "(");
+            foreign_key.column_names.push_back(Take(TokenType::Identifier, "column name").text);
+            while (Match(TokenType::Comma)) {
+                foreign_key.column_names.push_back(Take(TokenType::Identifier, "column name").text);
+            }
+            Take(TokenType::RightParen, ")");
+            if (!IsWord(current_, "REFERENCES")) {
+                throw SqlError("Expected REFERENCES", current_.position);
+            }
+            Take(TokenType::Identifier, "REFERENCES");
+            foreign_key.referenced_table_name = Take(TokenType::Identifier, "referenced table").text;
+            Take(TokenType::LeftParen, "(");
+            foreign_key.referenced_column_names.push_back(
+                Take(TokenType::Identifier, "referenced column").text);
+            while (Match(TokenType::Comma)) {
+                foreign_key.referenced_column_names.push_back(
+                    Take(TokenType::Identifier, "referenced column").text);
+            }
+            Take(TokenType::RightParen, ")");
+            statement.foreign_keys.push_back(std::move(foreign_key));
+            continue;
+        }
         if (IsWord(current_, "CHECK") && next_.type == TokenType::LeftParen) {
             Take(TokenType::Identifier, "CHECK");
             Take(TokenType::LeftParen, "(");

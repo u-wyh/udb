@@ -23,7 +23,7 @@ namespace {
 constexpr std::uint64_t kMagic = 0x314154454d424455;  // "UDBMETA1"
 constexpr std::uint32_t kVersion = 6;
 constexpr std::uint64_t kCatalogMagic = 0x3154414353595355;  // "USYSCAT1"
-constexpr std::uint32_t kCatalogVersion = 4;
+constexpr std::uint32_t kCatalogVersion = 5;
 
 std::filesystem::path MetadataPath(const std::filesystem::path& path) {
     if (path.empty() || path.extension() != ".udb") {
@@ -337,6 +337,14 @@ void Database::WriteSystemCatalog() {
         for (const auto& check : table.GetSchema().GetCheckExpressions()) {
             WriteString(bytes, check);
         }
+        Write(bytes, table.GetSchema().GetForeignKeys().size(), 4);
+        for (const auto& foreign_key : table.GetSchema().GetForeignKeys()) {
+            Write(bytes, foreign_key.column_indexes.size(), 4);
+            for (const auto column : foreign_key.column_indexes) { Write(bytes, column, 8); }
+            Write(bytes, foreign_key.referenced_table_id, 8);
+            Write(bytes, foreign_key.referenced_column_indexes.size(), 4);
+            for (const auto column : foreign_key.referenced_column_indexes) { Write(bytes, column, 8); }
+        }
     }
     const auto index_ids = catalog_->ListIndexes();
     Write(bytes, catalog_->next_index_id_, 8);
@@ -486,9 +494,66 @@ void Database::LoadMetadata() {
                     checks.push_back(catalog_reader.String());
                 }
             }
+            std::vector<ForeignKeyConstraint> foreign_keys;
+            if (catalog_version >= 5) {
+                const auto foreign_key_count = catalog_reader.Read(4);
+                foreign_keys.reserve(static_cast<std::size_t>(foreign_key_count));
+                for (std::uint64_t key = 0; key < foreign_key_count; ++key) {
+                    const auto source_count = catalog_reader.Read(4);
+                    if (source_count == 0 || source_count > catalog_reader.Remaining() / 8) {
+                        throw std::runtime_error("Invalid system catalog FOREIGN KEY columns");
+                    }
+                    std::vector<std::size_t> source_columns;
+                    source_columns.reserve(static_cast<std::size_t>(source_count));
+                    for (std::uint64_t column = 0; column < source_count; ++column) {
+                        const auto value = catalog_reader.Read(8);
+                        if (value > std::numeric_limits<std::size_t>::max()) {
+                            throw std::runtime_error("Invalid system catalog FOREIGN KEY column");
+                        }
+                        source_columns.push_back(static_cast<std::size_t>(value));
+                    }
+                    const auto referenced_table = catalog_reader.Read(8);
+                    const auto target_count = catalog_reader.Read(4);
+                    if (target_count != source_count || target_count > catalog_reader.Remaining() / 8) {
+                        throw std::runtime_error("Invalid system catalog referenced columns");
+                    }
+                    std::vector<std::size_t> target_columns;
+                    target_columns.reserve(static_cast<std::size_t>(target_count));
+                    for (std::uint64_t column = 0; column < target_count; ++column) {
+                        const auto value = catalog_reader.Read(8);
+                        if (value > std::numeric_limits<std::size_t>::max()) {
+                            throw std::runtime_error("Invalid system catalog referenced column");
+                        }
+                        target_columns.push_back(static_cast<std::size_t>(value));
+                    }
+                    foreign_keys.push_back({std::move(source_columns), referenced_table,
+                                            std::move(target_columns)});
+                }
+            }
             catalog_->RestoreTable(TableMetadata(
-                id, name, Schema(std::move(columns), std::move(checks)),
+                id, name, Schema(std::move(columns), std::move(checks), std::move(foreign_keys)),
                 static_cast<page_id_t>(first)));
+        }
+        for (const auto id : catalog_->ListTables()) {
+            const auto& schema = catalog_->GetTable(id).GetSchema();
+            for (const auto& foreign_key : schema.GetForeignKeys()) {
+                try {
+                    const auto& referenced = catalog_->GetTable(foreign_key.referenced_table_id);
+                    for (std::size_t column = 0; column < foreign_key.column_indexes.size(); ++column) {
+                        const auto source = foreign_key.column_indexes[column];
+                        const auto target = foreign_key.referenced_column_indexes[column];
+                        if (source >= schema.GetColumnCount() ||
+                            target >= referenced.GetSchema().GetColumnCount() ||
+                            !referenced.GetSchema().GetColumn(target).IsUnique() ||
+                            schema.GetColumn(source).GetType() !=
+                                referenced.GetSchema().GetColumn(target).GetType()) {
+                            throw std::runtime_error("Invalid system catalog FOREIGN KEY");
+                        }
+                    }
+                } catch (const std::out_of_range&) {
+                    throw std::runtime_error("System catalog FOREIGN KEY references missing table");
+                }
+            }
         }
         const auto next_index_id = catalog_reader.Read(8);
         const auto index_count = catalog_reader.Read(8);

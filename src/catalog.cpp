@@ -102,6 +102,27 @@ const TableMetadata& Catalog::CreateTable(const std::string& name, const Schema&
             static_cast<void>(IndexKeyWidth(schema, std::vector<std::size_t>{column}));
         }
     }
+    for (const auto& foreign_key : schema.GetForeignKeys()) {
+        if (foreign_key.column_indexes.size() != 1 ||
+            foreign_key.referenced_column_indexes.size() != 1) {
+            throw std::invalid_argument("Only single-column FOREIGN KEY is currently supported");
+        }
+        const auto referenced = tables_.find(foreign_key.referenced_table_id);
+        if (referenced == tables_.end()) {
+            throw std::invalid_argument("FOREIGN KEY references a missing table");
+        }
+        const auto source_column = foreign_key.column_indexes.front();
+        const auto target_column = foreign_key.referenced_column_indexes.front();
+        const auto& target_schema = referenced->second->metadata.GetSchema();
+        if (target_column >= target_schema.GetColumnCount() ||
+            !target_schema.GetColumn(target_column).IsUnique()) {
+            throw std::invalid_argument("FOREIGN KEY must reference a unique column");
+        }
+        if (schema.GetColumn(source_column).GetType() !=
+            target_schema.GetColumn(target_column).GetType()) {
+            throw std::invalid_argument("FOREIGN KEY column types do not match");
+        }
+    }
     if (next_id_ == std::numeric_limits<table_id_t>::max()) {
         throw std::overflow_error("Catalog table ID limit reached");
     }
@@ -154,6 +175,14 @@ void Catalog::DropTable(table_id_t id) {
     const std::lock_guard<std::recursive_mutex> lock(mutex_);
     const auto found = tables_.find(id);
     if (found == tables_.end()) { throw std::out_of_range("Table ID not found"); }
+    for (const auto& [other_id, entry] : tables_) {
+        if (other_id == id) { continue; }
+        for (const auto& foreign_key : entry->metadata.GetSchema().GetForeignKeys()) {
+            if (foreign_key.referenced_table_id == id) {
+                throw std::invalid_argument("Cannot drop a table referenced by a FOREIGN KEY");
+            }
+        }
+    }
     const auto metadata = found->second->metadata;
     std::vector<IndexMetadata> removed_indexes;
     for (const auto& [index_id, index] : indexes_) {

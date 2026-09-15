@@ -821,3 +821,12 @@
 - 测试结果：全新构建无警告，100 / 100 测试及 ASan / UBSan 通过，覆盖事务 DDL、约束持久化、NULL 语义和失败原子性，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 101：FOREIGN KEY 基础。
+
+
+## 阶段 101：FOREIGN KEY 基础
+
+- 做了什么：支持持久化单列 FOREIGN KEY，INSERT/UPDATE 验证父键，父行 DELETE/UPDATE 采用 RESTRICT。
+- 关键设计：元数据使用可扩展列索引向量；约束检查读取当前事务可见版本；相关父子表按 ID 顺序加锁。
+- 测试结果：全新构建无警告，101 / 101 测试及 ASan / UBSan 通过，覆盖 NULL、失败原子性、事务回滚、RESTRICT 与 reopen，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 102：Foreign Key Actions。

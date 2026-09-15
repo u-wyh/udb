@@ -308,7 +308,31 @@ BoundCreateTableStatement Binder::BindStatement(const CreateTableStatement& stat
         static_cast<void>(BindExpression(check, definition, TypeId::BOOLEAN));
         checks.push_back(SerializeExpression(check));
     }
-    return {statement.table_name, Schema(definition.GetColumns(), std::move(checks))};
+    std::vector<ForeignKeyConstraint> foreign_keys;
+    foreign_keys.reserve(statement.foreign_keys.size());
+    for (const auto& foreign_key : statement.foreign_keys) {
+        if (foreign_key.column_names.size() != 1 ||
+            foreign_key.referenced_column_names.size() != 1) {
+            throw BindError("Only single-column FOREIGN KEY is currently supported");
+        }
+        if (foreign_key.referenced_table_name == statement.table_name) {
+            throw BindError("Self-referencing FOREIGN KEY is not currently supported");
+        }
+        const auto source_column = FindColumn(definition, foreign_key.column_names.front());
+        const auto& referenced = Lookup(foreign_key.referenced_table_name);
+        const auto referenced_column = FindColumn(
+            referenced.GetSchema(), foreign_key.referenced_column_names.front());
+        const auto& target = referenced.GetSchema().GetColumn(referenced_column);
+        if (!target.IsUnique()) {
+            throw BindError("FOREIGN KEY must reference a PRIMARY KEY or UNIQUE column");
+        }
+        if (definition.GetColumn(source_column).GetType() != target.GetType()) {
+            throw BindError("FOREIGN KEY column types do not match");
+        }
+        foreign_keys.push_back({{source_column}, referenced.GetTableId(), {referenced_column}});
+    }
+    return {statement.table_name,
+            Schema(definition.GetColumns(), std::move(checks), std::move(foreign_keys))};
 }
 
 std::vector<BoundExpressionPtr> Binder::BindChecks(const Schema& schema) const {
