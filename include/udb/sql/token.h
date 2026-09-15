@@ -29,7 +29,7 @@ enum class TokenType {
     Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
     Create, Drop, Table, Index, On, Insert, Into, Values, Select, Delete, Update, Set, From, Where,
     Cross, Inner, Join, Group, Having, Order, By, As, Asc, Desc, Limit, Offset,
-    And, Or, Not,
+    And, Or, Not, Default,
     Integer, BigInt, Boolean, Varchar, True, False, Null
 };
 

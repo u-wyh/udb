@@ -794,3 +794,12 @@
 - 测试结果：全新构建无警告，97 / 97 测试及 ASan / UBSan 通过，覆盖四类 DDL、回滚、重开和并发 schema 可见性，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 98：Column Constraints。
+
+
+## 阶段 98：Column Constraints
+
+- 做了什么：新增持久化 NOT NULL 与类型化 DEFAULT 列元数据，并支持 INSERT/UPDATE 使用 DEFAULT。
+- 关键设计：Binder 执行约束检查，Tuple 保留防御性校验；system catalog payload v2 保存约束并兼容读取 v1。
+- 测试结果：全新构建无警告，98 / 98 测试及 ASan / UBSan 通过，覆盖约束、各类型默认值、事务、重开和旧 catalog，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 99：PRIMARY KEY / UNIQUE。

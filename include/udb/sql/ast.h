@@ -11,10 +11,25 @@
 
 namespace udb::sql {
 
+struct DefaultLiteral {};
+
+// NULL is untyped until binding. Integers use signed 64-bit literal range;
+// schema-specific narrowing belongs to binding. DEFAULT is only valid in
+// INSERT values, UPDATE assignments, and column definitions.
+using Literal = std::variant<std::monostate, DefaultLiteral, std::int64_t, std::string, bool>;
+
 struct ColumnDefinition {
+    ColumnDefinition() = default;
+    ColumnDefinition(std::string column_name, TypeId column_type,
+                     std::uint32_t length = 0, bool required = false,
+                     std::optional<Literal> default_literal = std::nullopt)
+        : name(std::move(column_name)), type(column_type), max_length(length),
+          not_null(required), default_value(std::move(default_literal)) {}
     std::string name;
-    TypeId type;
+    TypeId type = TypeId::INTEGER;
     std::uint32_t max_length = 0;
+    bool not_null = false;
+    std::optional<Literal> default_value;
 };
 
 struct CreateTableStatement {
@@ -36,10 +51,6 @@ struct DropTableStatement {
 struct DropIndexStatement {
     std::string index_name;
 };
-
-// NULL is untyped until binding. Integers use signed 64-bit literal range;
-// schema-specific narrowing belongs to binding.
-using Literal = std::variant<std::monostate, std::int64_t, std::string, bool>;
 
 enum class ComparisonOperator { Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual };
 enum class LogicalOperator { And, Or, Not };

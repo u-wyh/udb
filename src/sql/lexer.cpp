@@ -22,6 +22,7 @@ const std::unordered_map<std::string, TokenType> kKeywords = {
     {"ASC", TokenType::Asc}, {"DESC", TokenType::Desc},
     {"LIMIT", TokenType::Limit}, {"OFFSET", TokenType::Offset},
     {"AND", TokenType::And}, {"OR", TokenType::Or}, {"NOT", TokenType::Not},
+    {"DEFAULT", TokenType::Default},
     {"INTEGER", TokenType::Integer}, {"BIGINT", TokenType::BigInt},
     {"BOOLEAN", TokenType::Boolean}, {"VARCHAR", TokenType::Varchar},
     {"TRUE", TokenType::True}, {"FALSE", TokenType::False}, {"NULL", TokenType::Null}

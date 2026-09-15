@@ -110,6 +110,24 @@ CreateTableStatement Parser::CreateTable() {
         } else {
             throw SqlError("Expected column type", current_.position);
         }
+        bool saw_not_null = false;
+        bool saw_default = false;
+        while (current_.type == TokenType::Not || current_.type == TokenType::Default) {
+            if (Match(TokenType::Not)) {
+                if (saw_not_null) { throw SqlError("Duplicate NOT NULL", current_.position); }
+                Take(TokenType::Null, "NULL");
+                column.not_null = true;
+                saw_not_null = true;
+            } else {
+                const auto token = Take(TokenType::Default, "DEFAULT");
+                if (saw_default) { throw SqlError("Duplicate DEFAULT", token.position); }
+                if (current_.type == TokenType::Default) {
+                    throw SqlError("DEFAULT requires a literal", current_.position);
+                }
+                column.default_value = ParseLiteral();
+                saw_default = true;
+            }
+        }
         statement.columns.push_back(std::move(column));
     } while (Match(TokenType::Comma));
     Take(TokenType::RightParen, ")");
@@ -154,6 +172,7 @@ Literal Parser::ParseLiteral() {
         case TokenType::True: Take(TokenType::True, "TRUE"); return true;
         case TokenType::False: Take(TokenType::False, "FALSE"); return false;
         case TokenType::Null: Take(TokenType::Null, "NULL"); return std::monostate{};
+        case TokenType::Default: Take(TokenType::Default, "DEFAULT"); return DefaultLiteral{};
         default: throw SqlError("Expected literal", current_.position);
     }
 }

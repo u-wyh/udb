@@ -8,7 +8,16 @@ namespace udb::sql {
 namespace {
 
 Value BindLiteral(const Literal& literal, const Column& column) {
-    if (std::holds_alternative<std::monostate>(literal)) { return Value::Null(column.GetType()); }
+    if (std::holds_alternative<DefaultLiteral>(literal)) {
+        if (!column.GetDefaultValue()) {
+            throw BindError("Column has no DEFAULT: " + column.GetName());
+        }
+        return *column.GetDefaultValue();
+    }
+    if (std::holds_alternative<std::monostate>(literal)) {
+        if (column.IsNotNull()) { throw BindError("NULL violates NOT NULL column: " + column.GetName()); }
+        return Value::Null(column.GetType());
+    }
     if (const auto* integer = std::get_if<std::int64_t>(&literal)) {
         // AST integer literals are untyped int64 payloads. Assign INTEGER when
         // representable in int32, otherwise BIGINT; do not widen/narrow afterwards.
@@ -220,7 +229,16 @@ BoundCreateTableStatement Binder::BindStatement(const CreateTableStatement& stat
     }
     std::vector<Column> columns;
     for (const auto& column : statement.columns) {
-        columns.emplace_back(column.name, column.type, column.max_length);
+        const Column definition(column.name, column.type, column.max_length, column.not_null);
+        std::optional<Value> default_value;
+        if (column.default_value) {
+            if (std::holds_alternative<DefaultLiteral>(*column.default_value)) {
+                throw BindError("Column DEFAULT requires a literal");
+            }
+            default_value = BindLiteral(*column.default_value, definition);
+        }
+        columns.emplace_back(column.name, column.type, column.max_length,
+                             column.not_null, std::move(default_value));
     }
     return {statement.table_name, Schema(std::move(columns))};
 }
@@ -452,7 +470,13 @@ BoundUpdateStatement Binder::BindStatement(const UpdateStatement& statement) con
         if (assigned[index]) { throw BindError("Column assigned more than once: " + assignment.column_name); }
         assigned[index] = true;
         const auto& column = schema.GetColumn(index);
-        auto value = BindExpressionLiteral(assignment.value, column.GetType());
+        auto value = std::holds_alternative<DefaultLiteral>(assignment.value)
+            ? (column.GetDefaultValue() ? *column.GetDefaultValue()
+                                        : throw BindError("Column has no DEFAULT: " + column.GetName()))
+            : BindExpressionLiteral(assignment.value, column.GetType());
+        if (value.IsNull() && column.IsNotNull()) {
+            throw BindError("NULL violates NOT NULL column: " + column.GetName());
+        }
         if (!value.IsNull() && column.GetType() == TypeId::VARCHAR &&
             value.GetVarchar().size() > column.GetMaxLength()) {
             throw BindError("VARCHAR too long for column: " + column.GetName());

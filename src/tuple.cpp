@@ -57,6 +57,9 @@ void Tuple::Validate(const Schema& schema) const {
         if (value.GetType() != column.GetType()) {
             throw std::invalid_argument("Tuple value type mismatch (including typed NULL)");
         }
+        if (value.IsNull() && column.IsNotNull()) {
+            throw std::invalid_argument("Tuple NULL violates NOT NULL column");
+        }
         if (!value.IsNull() && value.GetType() == TypeId::VARCHAR &&
             value.GetVarchar().size() > column.GetMaxLength()) {
             throw std::invalid_argument("Tuple VARCHAR exceeds column byte limit");

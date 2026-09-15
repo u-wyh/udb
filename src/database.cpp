@@ -2,6 +2,7 @@
 #include "udb/recovery_manager.h"
 
 #include <cerrno>
+#include <cstring>
 #include <fcntl.h>
 #include <fstream>
 #include <limits>
@@ -22,7 +23,7 @@ namespace {
 constexpr std::uint64_t kMagic = 0x314154454d424455;  // "UDBMETA1"
 constexpr std::uint32_t kVersion = 6;
 constexpr std::uint64_t kCatalogMagic = 0x3154414353595355;  // "USYSCAT1"
-constexpr std::uint32_t kCatalogVersion = 1;
+constexpr std::uint32_t kCatalogVersion = 2;
 
 std::filesystem::path MetadataPath(const std::filesystem::path& path) {
     if (path.empty() || path.extension() != ".udb") {
@@ -99,6 +100,28 @@ TypeId DecodeType(std::uint64_t type) {
     throw std::runtime_error("Unknown metadata TypeId");
 }
 
+void WriteValue(std::vector<unsigned char>& bytes, const Value& value) {
+    Write(bytes, value.IsNull() ? 1 : 0, 1);
+    if (value.IsNull()) { return; }
+    switch (value.GetType()) {
+        case TypeId::BOOLEAN: Write(bytes, value.GetBoolean() ? 1 : 0, 1); break;
+        case TypeId::INTEGER:
+            Write(bytes, static_cast<std::uint32_t>(value.GetInteger()), 4);
+            break;
+        case TypeId::BIGINT:
+            Write(bytes, static_cast<std::uint64_t>(value.GetBigInt()), 8);
+            break;
+        case TypeId::VARCHAR: WriteString(bytes, value.GetVarchar()); break;
+        case TypeId::DOUBLE: {
+            std::uint64_t raw = 0;
+            const auto number = value.GetDouble();
+            std::memcpy(&raw, &number, sizeof(raw));
+            Write(bytes, raw, 8);
+            break;
+        }
+    }
+}
+
 class Reader {
 public:
     explicit Reader(const std::filesystem::path& path) {
@@ -136,6 +159,44 @@ private:
     std::vector<char> bytes_;
     std::size_t position_ = 0;
 };
+
+Value ReadValue(Reader& reader, TypeId type) {
+    const auto is_null = reader.Read(1);
+    if (is_null > 1) { throw std::runtime_error("Invalid catalog default NULL flag"); }
+    if (is_null == 1) { return Value::Null(type); }
+    switch (type) {
+        case TypeId::BOOLEAN: {
+            const auto value = reader.Read(1);
+            if (value > 1) { throw std::runtime_error("Invalid catalog BOOLEAN default"); }
+            return Value::Boolean(value == 1);
+        }
+        case TypeId::INTEGER: {
+            const auto raw = reader.Read(4);
+            const auto value = raw <= static_cast<std::uint64_t>(
+                                        std::numeric_limits<std::int32_t>::max())
+                ? static_cast<std::int64_t>(raw)
+                : static_cast<std::int64_t>(raw) - (std::int64_t{1} << 32);
+            return Value::Integer(static_cast<std::int32_t>(value));
+        }
+        case TypeId::BIGINT: {
+            const auto raw = reader.Read(8);
+            const auto value = raw <= static_cast<std::uint64_t>(
+                                        std::numeric_limits<std::int64_t>::max())
+                ? static_cast<std::int64_t>(raw)
+                : -1 - static_cast<std::int64_t>(~raw);
+            return Value::BigInt(value);
+        }
+        case TypeId::VARCHAR:
+            return Value::Varchar(reader.String());
+        case TypeId::DOUBLE: {
+            const auto raw = reader.Read(8);
+            double value = 0;
+            std::memcpy(&value, &raw, sizeof(value));
+            return Value::Double(value);
+        }
+    }
+    throw std::runtime_error("Unknown catalog default type");
+}
 
 }  // namespace
 
@@ -266,6 +327,9 @@ void Database::WriteSystemCatalog() {
             WriteString(bytes, column.GetName());
             Write(bytes, EncodeType(column.GetType()), 1);
             Write(bytes, column.GetMaxLength(), 4);
+            Write(bytes, column.IsNotNull() ? 1 : 0, 1);
+            Write(bytes, column.GetDefaultValue().has_value() ? 1 : 0, 1);
+            if (column.GetDefaultValue()) { WriteValue(bytes, *column.GetDefaultValue()); }
         }
     }
     const auto index_ids = catalog_->ListIndexes();
@@ -352,8 +416,12 @@ void Database::LoadMetadata() {
 
         const auto catalog_bytes = SystemCatalogStorage(*pool_, *catalog_root_page_id_).Read();
         Reader catalog_reader(catalog_bytes);
-        if (catalog_reader.Read(8) != kCatalogMagic || catalog_reader.Read(4) != kCatalogVersion) {
+        if (catalog_reader.Read(8) != kCatalogMagic) {
             throw std::runtime_error("Invalid system catalog header");
+        }
+        const auto catalog_version = catalog_reader.Read(4);
+        if (catalog_version < 1 || catalog_version > kCatalogVersion) {
+            throw std::runtime_error("Unsupported system catalog version");
         }
         const auto next_id = catalog_reader.Read(8);
         const auto count = catalog_reader.Read(8);
@@ -376,7 +444,19 @@ void Database::LoadMetadata() {
                 auto column_name = catalog_reader.String();
                 const auto type = DecodeType(catalog_reader.Read(1));
                 const auto max_length = static_cast<std::uint32_t>(catalog_reader.Read(4));
-                columns.emplace_back(std::move(column_name), type, max_length);
+                bool not_null = false;
+                std::optional<Value> default_value;
+                if (catalog_version >= 2) {
+                    const auto required = catalog_reader.Read(1);
+                    const auto has_default = catalog_reader.Read(1);
+                    if (required > 1 || has_default > 1) {
+                        throw std::runtime_error("Invalid system catalog column flags");
+                    }
+                    not_null = required == 1;
+                    if (has_default == 1) { default_value = ReadValue(catalog_reader, type); }
+                }
+                columns.emplace_back(std::move(column_name), type, max_length,
+                                     not_null, std::move(default_value));
             }
             catalog_->RestoreTable(TableMetadata(id, name, Schema(std::move(columns)),
                                                  static_cast<page_id_t>(first)));
