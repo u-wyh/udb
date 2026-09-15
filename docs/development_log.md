@@ -736,3 +736,11 @@
 - 测试结果：全新构建无警告，90 / 90 测试及 ASan / UBSan 通过，覆盖 CLR 刷盘前后中断、连续两次恢复崩溃与幂等重开，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 91：Fuzzy Checkpoint。
+
+## 阶段 91：Fuzzy Checkpoint
+
+- 做了什么：实现允许活跃事务存在的 fuzzy checkpoint，并持久化 Transaction Table 与 Dirty Page Table 快照。
+- 关键设计：checkpoint sidecar 带版本和校验；活跃事务存在时保留完整 WAL；无活跃事务时维持安全 WAL recycle。
+- 测试结果：全新构建无警告，91 / 91 测试及 ASan / UBSan 通过，覆盖 loser/winner 跨 checkpoint、TT/DPT 持久化和重开恢复，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 92：WAL Truncation。

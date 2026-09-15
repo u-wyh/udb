@@ -53,6 +53,7 @@ void BufferPoolManager::WriteBack(std::size_t index) {
         disk_.WritePage(frame.page_id, frame.page, frame.page_lsn);
         frame.dirty = false;
         frame.page_lsn.reset();
+        frame.rec_lsn.reset();
     }
 }
 
@@ -78,6 +79,7 @@ Page* BufferPoolManager::Install(std::size_t index, page_id_t page_id, const Pag
     frame.dirty = false;
     frame.in_use = true;
     frame.page_lsn.reset();
+    frame.rec_lsn.reset();
     Touch(index);
     return &frame.page;
 }
@@ -139,6 +141,7 @@ std::pair<page_id_t, Page*> BufferPoolManager::NewPageLocked() {
     auto* page = Install(index, page_id, Page{});
     ClaimPageLocked(page_id, active_transaction);
     frames_[index].page_lsn = allocation_lsn;
+    frames_[index].rec_lsn = allocation_lsn;
     if (allocation_lsn) { disk_.SetPageLsn(page_id, *allocation_lsn); }
     return {page_id, page};
 }
@@ -216,6 +219,7 @@ void BufferPoolManager::CompleteWrite(page_id_t page_id, const Page& before,
         try {
             frame.page_lsn = log_manager_->Append(
                 LogRecord::PageWrite(active_transaction->GetId(), page_id, before, after));
+            if (!frame.rec_lsn) { frame.rec_lsn = frame.page_lsn; }
             active_transaction->last_lsn_ = frame.page_lsn;
         } catch (...) {
             if (!write_error_) { write_error_ = std::current_exception(); }
@@ -274,6 +278,7 @@ void BufferPoolManager::FlushPage(page_id_t page_id) {
     disk_.WritePage(page_id, frame.page, frame.page_lsn);
     frame.dirty = false;
     frame.page_lsn.reset();
+    frame.rec_lsn.reset();
 }
 
 void BufferPoolManager::FlushAllPages() {
@@ -282,6 +287,17 @@ void BufferPoolManager::FlushAllPages() {
         if (frames_[i].write_guard_count != 0) { continue; }
         WriteBack(i);
     }
+}
+
+std::map<page_id_t, lsn_t> BufferPoolManager::GetDirtyPageTable() const {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    std::map<page_id_t, lsn_t> result;
+    for (const auto& frame : frames_) {
+        if (frame.in_use && frame.dirty && frame.rec_lsn) {
+            result.emplace(frame.page_id, *frame.rec_lsn);
+        }
+    }
+    return result;
 }
 
 bool BufferPoolManager::CanDeletePage(page_id_t page_id) const {
@@ -346,6 +362,7 @@ bool BufferPoolManager::DeletePageLocked(page_id_t page_id) {
     frame.dirty = false;
     frame.in_use = false;
     frame.page_lsn.reset();
+    frame.rec_lsn.reset();
     Touch(index);
     return true;
 }
@@ -431,6 +448,7 @@ void BufferPoolManager::RollbackTransaction(Transaction& transaction) {
             }
             frame.page = page;
             frame.dirty = false;
+            frame.rec_lsn.reset();
         }
     }
     for (const auto& [page_id, page] : transaction.before_images_) {
@@ -444,6 +462,7 @@ void BufferPoolManager::RollbackTransaction(Transaction& transaction) {
             }
             frame.page = page;
             frame.dirty = false;
+            frame.rec_lsn.reset();
         }
     }
 }

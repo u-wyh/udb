@@ -23,7 +23,7 @@ public:
     LogManager& GetLogManager();
     const LogManager& GetLogManager() const;
     void Flush();  // Durably flushes WAL, dirty data, then metadata; retains WAL.
-    void Checkpoint();  // Flushes a transaction-complete state and recycles WAL.
+    void Checkpoint();  // Persists a fuzzy checkpoint; recycles WAL when no transaction is active.
     void Close();  // Idempotent. On failure stays open so caller can retry.
     // References to catalog/tables are invalid after Close/destruction.
 

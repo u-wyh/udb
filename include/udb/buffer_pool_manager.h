@@ -45,6 +45,7 @@ public:
     // Missing resident IDs throw out_of_range. FlushAllPages writes only dirty pages.
     void FlushPage(page_id_t page_id);
     void FlushAllPages();
+    std::map<page_id_t, lsn_t> GetDirtyPageTable() const;
     // A pinned resident page cannot be deleted and leaves all state unchanged.
     // Invalid/free IDs throw through DiskManager. Dirty deleted pages are discarded.
     bool CanDeletePage(page_id_t page_id) const;
@@ -68,6 +69,7 @@ private:
         bool dirty = false;
         bool in_use = false;
         std::optional<lsn_t> page_lsn;
+        std::optional<lsn_t> rec_lsn;
         mutable std::shared_mutex latch;
     };
 

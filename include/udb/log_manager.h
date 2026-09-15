@@ -25,6 +25,12 @@ enum class LogRecordType : std::uint8_t {
 
 enum class CompensationType : std::uint8_t { PageWrite = 0, PageAllocate = 1, PageFree = 2 };
 
+struct LogCheckpoint {
+    lsn_t checkpoint_lsn = 0;
+    std::map<transaction_id_t, lsn_t> transaction_table;
+    std::map<page_id_t, lsn_t> dirty_page_table;
+};
+
 class LogRecord {
 public:
     static LogRecord Begin(transaction_id_t transaction_id);
@@ -88,12 +94,16 @@ class LogManager {
 public:
     explicit LogManager(const std::filesystem::path& path);
     static std::filesystem::path GetSequencePath(const std::filesystem::path& wal_path);
+    static std::filesystem::path GetCheckpointPath(const std::filesystem::path& wal_path);
     LogManager(const LogManager&) = delete;
     LogManager& operator=(const LogManager&) = delete;
 
     lsn_t Append(LogRecord record);
     void Flush();
     bool HasActiveTransactions() const;
+    std::map<transaction_id_t, lsn_t> GetActiveTransactionTable() const;
+    void WriteCheckpoint(const LogCheckpoint& checkpoint);
+    std::optional<LogCheckpoint> ReadCheckpoint() const;
     // Used after a checkpoint has safely persisted data/metadata.
     void Reset();
     const std::vector<LogRecord>& GetRecords() const { return records_; }
@@ -105,6 +115,7 @@ public:
 private:
     std::filesystem::path path_;
     std::filesystem::path sequence_path_;
+    std::filesystem::path checkpoint_path_;
     std::ofstream output_;
     std::vector<LogRecord> records_;
     lsn_t next_lsn_ = 0;

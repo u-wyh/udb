@@ -154,9 +154,14 @@ std::unique_ptr<Database> Database::Create(const std::filesystem::path& path, st
     const auto wal = WalPath(path);
     const auto page_lsns = DiskManager::GetPageLsnPath(path);
     const auto wal_sequence = LogManager::GetSequencePath(wal);
+    const auto wal_checkpoint = LogManager::GetCheckpointPath(wal);
+    auto wal_checkpoint_temporary = wal_checkpoint;
+    wal_checkpoint_temporary += ".tmp";
     if (capacity == 0) { throw std::invalid_argument("Buffer pool capacity must be positive"); }
     if (Exists(path) || Exists(metadata) || Exists(wal) || Exists(page_lsns) ||
         Exists(wal_sequence) ||
+        Exists(wal_checkpoint) ||
+        Exists(wal_checkpoint_temporary) ||
         Exists(TemporaryPath(metadata))) {
         throw std::runtime_error("Database files already exist");
     }
@@ -171,6 +176,8 @@ std::unique_ptr<Database> Database::Create(const std::filesystem::path& path, st
         std::filesystem::remove(wal, error);
         std::filesystem::remove(page_lsns, error);
         std::filesystem::remove(wal_sequence, error);
+        std::filesystem::remove(wal_checkpoint, error);
+        std::filesystem::remove(wal_checkpoint_temporary, error);
         throw;
     }
 }
@@ -207,15 +214,24 @@ void Database::Flush() {
 
 void Database::Checkpoint() {
     RequireOpen();
-    if (log_manager_->HasActiveTransactions()) {
-        throw std::logic_error("Cannot checkpoint with an active transaction");
-    }
+    const LogCheckpoint checkpoint{log_manager_->GetNextLsn(),
+                                   log_manager_->GetActiveTransactionTable(),
+                                   pool_->GetDirtyPageTable()};
     Flush();
-    log_manager_->Reset();
+    if (checkpoint.transaction_table.empty()) {
+        log_manager_->Reset();
+        log_manager_->WriteCheckpoint(
+            LogCheckpoint{log_manager_->GetNextLsn(), {}, {}});
+    } else {
+        log_manager_->WriteCheckpoint(checkpoint);
+    }
 }
 
 void Database::Close() {
     if (!catalog_) { return; }
+    if (log_manager_->HasActiveTransactions()) {
+        throw std::logic_error("Cannot close with an active transaction");
+    }
     Checkpoint();
     catalog_.reset();
     pool_.reset();

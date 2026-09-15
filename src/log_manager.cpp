@@ -37,6 +37,8 @@ constexpr std::size_t kHeaderSize = 64;
 constexpr std::uint64_t kMissing = std::numeric_limits<std::uint64_t>::max();
 constexpr std::uint64_t kSequenceMagic = 0x31514553424455ULL;  // "UDBSEQ1"
 constexpr std::uint32_t kSequenceVersion = 1;
+constexpr std::uint64_t kCheckpointMagic = 0x31545043424455ULL;  // "UDBCP1"
+constexpr std::uint32_t kCheckpointVersion = 1;
 
 void Write(std::vector<unsigned char>& bytes, std::uint64_t value, std::size_t width) {
     for (std::size_t i = 0; i < width; ++i) {
@@ -331,7 +333,8 @@ void LogRecord::Validate() const {
 }
 
 LogManager::LogManager(const std::filesystem::path& path)
-    : path_(path), sequence_path_(GetSequencePath(path)) {
+    : path_(path), sequence_path_(GetSequencePath(path)),
+      checkpoint_path_(GetCheckpointPath(path)) {
     if (path.empty() || path.extension() != ".wal") {
         throw std::invalid_argument("WAL path must end in .wal");
     }
@@ -376,6 +379,13 @@ std::filesystem::path LogManager::GetSequencePath(
     const std::filesystem::path& wal_path) {
     auto result = wal_path;
     result += ".seq";
+    return result;
+}
+
+std::filesystem::path LogManager::GetCheckpointPath(
+    const std::filesystem::path& wal_path) {
+    auto result = wal_path;
+    result += ".ckpt";
     return result;
 }
 
@@ -479,6 +489,98 @@ bool LogManager::HasActiveTransactions() const {
         }
     }
     return !active.empty();
+}
+
+std::map<transaction_id_t, lsn_t> LogManager::GetActiveTransactionTable() const {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return transaction_last_lsns_;
+}
+
+void LogManager::WriteCheckpoint(const LogCheckpoint& checkpoint) {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::vector<unsigned char> bytes;
+    Write(bytes, kCheckpointMagic, 8);
+    Write(bytes, kCheckpointVersion, 4);
+    Write(bytes, 0, 4);
+    Write(bytes, checkpoint.checkpoint_lsn, 8);
+    Write(bytes, checkpoint.transaction_table.size(), 8);
+    Write(bytes, checkpoint.dirty_page_table.size(), 8);
+    for (const auto& [transaction_id, last_lsn] : checkpoint.transaction_table) {
+        Write(bytes, transaction_id, 8);
+        Write(bytes, last_lsn, 8);
+    }
+    for (const auto& [page_id, rec_lsn] : checkpoint.dirty_page_table) {
+        if (page_id < 0) { throw std::invalid_argument("Checkpoint page ID is invalid"); }
+        Write(bytes, static_cast<std::uint64_t>(page_id), 8);
+        Write(bytes, rec_lsn, 8);
+    }
+    Overwrite(bytes, 12, Checksum(bytes), 4);
+    auto temporary = checkpoint_path_;
+    temporary += ".tmp";
+    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+    output.write(reinterpret_cast<const char*>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
+    output.close();
+    if (!output) { throw std::runtime_error("Cannot write WAL checkpoint sidecar"); }
+    const auto descriptor = ::open(temporary.c_str(), O_RDONLY);
+    if (descriptor < 0) { throw std::runtime_error("Cannot open WAL checkpoint sidecar"); }
+    const auto sync_error = ::fsync(descriptor) != 0;
+    const auto close_error = ::close(descriptor) != 0;
+    if (sync_error || close_error) {
+        throw std::runtime_error("Cannot durably sync WAL checkpoint sidecar");
+    }
+    std::filesystem::rename(temporary, checkpoint_path_);
+    auto parent = checkpoint_path_.parent_path();
+    if (parent.empty()) { parent = "."; }
+    const auto directory = ::open(parent.c_str(), O_RDONLY | O_DIRECTORY);
+    if (directory < 0) { throw std::runtime_error("Cannot open WAL checkpoint directory"); }
+    const auto directory_sync_error = ::fsync(directory) != 0;
+    const auto directory_close_error = ::close(directory) != 0;
+    if (directory_sync_error || directory_close_error) {
+        throw std::runtime_error("Cannot durably sync WAL checkpoint directory");
+    }
+}
+
+std::optional<LogCheckpoint> LogManager::ReadCheckpoint() const {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (!std::filesystem::exists(checkpoint_path_)) { return std::nullopt; }
+    auto bytes = ReadFile(checkpoint_path_);
+    if (bytes.size() < 40 || Read(bytes, 0, 8) != kCheckpointMagic ||
+        Read(bytes, 8, 4) != kCheckpointVersion) {
+        throw std::runtime_error("Unsupported WAL checkpoint sidecar format");
+    }
+    const auto checksum = Read(bytes, 12, 4);
+    Overwrite(bytes, 12, 0, 4);
+    if (Checksum(bytes) != checksum) {
+        throw std::runtime_error("WAL checkpoint sidecar checksum mismatch");
+    }
+    LogCheckpoint checkpoint;
+    checkpoint.checkpoint_lsn = Read(bytes, 16, 8);
+    const auto transaction_count = Read(bytes, 24, 8);
+    const auto dirty_count = Read(bytes, 32, 8);
+    if (transaction_count > (bytes.size() - 40) / 16 ||
+        dirty_count > (bytes.size() - 40) / 16 - transaction_count ||
+        40 + 16 * (transaction_count + dirty_count) != bytes.size()) {
+        throw std::runtime_error("Invalid WAL checkpoint sidecar length");
+    }
+    std::size_t offset = 40;
+    for (std::uint64_t i = 0; i < transaction_count; ++i, offset += 16) {
+        if (!checkpoint.transaction_table.emplace(Read(bytes, offset, 8),
+                                                  Read(bytes, offset + 8, 8)).second) {
+            throw std::runtime_error("Duplicate checkpoint transaction ID");
+        }
+    }
+    for (std::uint64_t i = 0; i < dirty_count; ++i, offset += 16) {
+        const auto page = Read(bytes, offset, 8);
+        if (page > static_cast<std::uint64_t>(std::numeric_limits<page_id_t>::max())) {
+            throw std::runtime_error("Invalid checkpoint page ID");
+        }
+        if (!checkpoint.dirty_page_table.emplace(static_cast<page_id_t>(page),
+                                                 Read(bytes, offset + 8, 8)).second) {
+            throw std::runtime_error("Duplicate checkpoint page ID");
+        }
+    }
+    return checkpoint;
 }
 
 void LogManager::Reset() {

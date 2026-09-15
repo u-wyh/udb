@@ -54,7 +54,7 @@ void TestCheckpointAndTailRecovery(const std::filesystem::path& path) {
     }
 }
 
-void TestActiveTransactionBarrier(const std::filesystem::path& path) {
+void TestActiveTransactionCheckpoint(const std::filesystem::path& path) {
     auto database = Database::Create(path, 2);
     SqlEngine sql(database->GetCatalog());
     sql.ExecuteSQL("CREATE TABLE t (id INTEGER)");
@@ -62,10 +62,13 @@ void TestActiveTransactionBarrier(const std::filesystem::path& path) {
 
     sql.ExecuteSQL("BEGIN");
     sql.ExecuteSQL("INSERT INTO t VALUES (7)");
-    Reject([&] { database->Checkpoint(); });
+    database->Checkpoint();
+    const auto checkpoint = database->GetLogManager().ReadCheckpoint();
     Check(database->GetLogManager().HasActiveTransactions() &&
-          !database->GetLogManager().GetRecords().empty(),
-          "Rejected checkpoint discarded an active transaction's WAL");
+          !database->GetLogManager().GetRecords().empty() && checkpoint &&
+          checkpoint->transaction_table.size() == 1,
+          "Fuzzy checkpoint discarded active transaction state");
+    Reject([&] { database->Close(); });
 
     sql.ExecuteSQL("ROLLBACK");
     database->Checkpoint();
@@ -88,7 +91,7 @@ int main() {
             ~Cleanup() { std::error_code error; std::filesystem::remove_all(path, error); }
         } cleanup{directory};
         TestCheckpointAndTailRecovery(directory / "tail.udb");
-        TestActiveTransactionBarrier(directory / "active.udb");
+        TestActiveTransactionCheckpoint(directory / "active.udb");
         std::cout << "Checkpoint tests passed\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
