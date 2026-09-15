@@ -905,7 +905,8 @@ ExecutionResult Executor::Execute(const PlanNode& plan, ExecutionContext& contex
     AcquireExecutionLocks(plan, statement_locks, catalog_);
     RegisterSerializablePlanReads(plan, context);
     auto& pool = catalog_.GetBufferPoolManager();
-    const bool writes_pages = WritesPages(plan.GetType());
+    const bool writes_pages = WritesPages(plan.GetType()) &&
+                              context.GetTransactionManager() != nullptr;
     if (writes_pages) { pool.SetActiveTransaction(&transaction); }
     struct ActiveTransactionReset {
         BufferPoolManager& pool;

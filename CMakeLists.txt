@@ -84,6 +84,10 @@ add_executable(udb_catalog_migration_test tests/catalog_migration_test.cpp)
 target_link_libraries(udb_catalog_migration_test PRIVATE udb_sql_engine)
 add_test(NAME catalog_migration COMMAND udb_catalog_migration_test)
 
+add_executable(udb_transactional_catalog_test tests/transactional_catalog_test.cpp)
+target_link_libraries(udb_transactional_catalog_test PRIVATE udb_sql_engine)
+add_test(NAME transactional_catalog COMMAND udb_transactional_catalog_test)
+
 add_executable(udb_sql_test tests/sql_test.cpp)
 target_link_libraries(udb_sql_test PRIVATE udb_sql)
 add_test(NAME sql COMMAND udb_sql_test)
@@ -434,6 +438,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(udb_aries_mvcc_ssi_stress_test PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(udb_system_catalog_test PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(udb_catalog_migration_test PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(udb_transactional_catalog_test PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

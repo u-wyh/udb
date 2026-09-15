@@ -55,6 +55,7 @@ public:
     void CompleteWrite(page_id_t page_id, const Page& before, const Page& after) noexcept;
     void ThrowIfWriteError();
     void SetActiveTransaction(Transaction* transaction);
+    Transaction* GetActiveTransaction() const;
     void RollbackTransaction(Transaction& transaction);
     // A transaction retains ownership of every page it changes so a later
     // full-page rollback cannot erase another transaction's committed bytes.
@@ -84,7 +85,6 @@ private:
     void ThrowIfWriteErrorLocked();
     bool CanDeletePageLocked(page_id_t page_id) const;
     bool DeletePageLocked(page_id_t page_id);
-    Transaction* GetActiveTransaction() const;
     void WaitForPageOwnerLocked(std::unique_lock<std::mutex>& lock,
                                 page_id_t page_id, Transaction* transaction);
     void ClaimPageLocked(page_id_t page_id, Transaction* transaction);

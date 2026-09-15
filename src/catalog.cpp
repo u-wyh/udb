@@ -21,6 +21,10 @@ bool ValueLess(const Value& left, const Value& right) {
 
 }  // namespace
 
+void Catalog::PublishMutation() {
+    if (mutation_hook_) { mutation_hook_(); }
+}
+
 void Catalog::RestoreTable(const TableMetadata& metadata) {
     const std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (tables_.count(metadata.GetTableId()) != 0) {
@@ -91,9 +95,18 @@ const TableMetadata& Catalog::CreateTable(const std::string& name, const Schema&
     if (next_id_ == std::numeric_limits<table_id_t>::max()) {
         throw std::overflow_error("Catalog table ID limit reached");
     }
-    auto entry = std::make_unique<Entry>(pool_, next_id_, name, schema);
-    const auto inserted = tables_.emplace(next_id_, std::move(entry));
+    const auto created_id = next_id_;
+    auto entry = std::make_unique<Entry>(pool_, created_id, name, schema);
+    const auto inserted = tables_.emplace(created_id, std::move(entry));
     ++next_id_;
+    if (auto* transaction = pool_.GetActiveTransaction();
+        transaction != nullptr && transaction_manager_.OwnsTransaction(*transaction)) {
+        transaction_manager_.RegisterAbortAction(*transaction, [this, created_id] {
+            const std::lock_guard<std::recursive_mutex> undo_lock(mutex_);
+            tables_.erase(created_id);
+        });
+    }
+    PublishMutation();
     return inserted.first->second->metadata;
 }
 
@@ -101,6 +114,14 @@ void Catalog::DropTable(table_id_t id) {
     const std::lock_guard<std::recursive_mutex> lock(mutex_);
     const auto found = tables_.find(id);
     if (found == tables_.end()) { throw std::out_of_range("Table ID not found"); }
+    const auto metadata = found->second->metadata;
+    std::vector<IndexMetadata> removed_indexes;
+    for (const auto& [index_id, index] : indexes_) {
+        static_cast<void>(index_id);
+        if (index->GetMetadata().GetTableId() == id) {
+            removed_indexes.push_back(index->GetMetadata());
+        }
+    }
     found->second->heap.DeletePages();
     for (auto index = indexes_.begin(); index != indexes_.end();) {
         if (index->second->GetMetadata().GetTableId() != id) {
@@ -111,14 +132,33 @@ void Catalog::DropTable(table_id_t id) {
         index = indexes_.erase(index);
     }
     tables_.erase(found);
+    if (auto* transaction = pool_.GetActiveTransaction();
+        transaction != nullptr && transaction_manager_.OwnsTransaction(*transaction)) {
+        transaction_manager_.RegisterAbortAction(
+            *transaction, [this, metadata, removed_indexes = std::move(removed_indexes)] {
+                const std::lock_guard<std::recursive_mutex> undo_lock(mutex_);
+                RestoreTable(metadata);
+                for (const auto& index : removed_indexes) { RestoreIndex(index); }
+            });
+    }
+    PublishMutation();
 }
 
 void Catalog::DropIndex(index_id_t id) {
     const std::lock_guard<std::recursive_mutex> lock(mutex_);
     const auto found = indexes_.find(id);
     if (found == indexes_.end()) { throw std::out_of_range("Index ID not found"); }
+    const auto metadata = found->second->GetMetadata();
     found->second->GetTree().DeletePages();
     indexes_.erase(found);
+    if (auto* transaction = pool_.GetActiveTransaction();
+        transaction != nullptr && transaction_manager_.OwnsTransaction(*transaction)) {
+        transaction_manager_.RegisterAbortAction(*transaction, [this, metadata] {
+            const std::lock_guard<std::recursive_mutex> undo_lock(mutex_);
+            RestoreIndex(metadata);
+        });
+    }
+    PublishMutation();
 }
 
 std::size_t Catalog::Vacuum() {
@@ -290,9 +330,18 @@ const Index& Catalog::CreateIndex(const std::string& name, table_id_t table_id,
     }
     IndexMetadata metadata(next_index_id_, name, table_id, columns,
                            tree->GetHeaderPageId());
+    const auto created_id = next_index_id_;
     auto entry = std::unique_ptr<Index>(new Index(metadata, std::move(tree)));
-    const auto inserted = indexes_.emplace(next_index_id_, std::move(entry));
+    const auto inserted = indexes_.emplace(created_id, std::move(entry));
     ++next_index_id_;
+    if (auto* transaction = pool_.GetActiveTransaction();
+        transaction != nullptr && transaction_manager_.OwnsTransaction(*transaction)) {
+        transaction_manager_.RegisterAbortAction(*transaction, [this, created_id] {
+            const std::lock_guard<std::recursive_mutex> undo_lock(mutex_);
+            indexes_.erase(created_id);
+        });
+    }
+    PublishMutation();
     return *inserted.first->second;
 }
 

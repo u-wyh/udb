@@ -161,6 +161,7 @@ private:
     std::vector<UndoRecord> undo_records_;
     std::set<RID> write_rids_;
     std::set<StaleIndexEntry> stale_index_entries_;
+    std::vector<std::function<void()>> abort_actions_;
     std::set<transaction_id_t> incoming_rw_dependencies_;
     std::set<transaction_id_t> outgoing_rw_dependencies_;
     std::set<RID> tuple_sireads_;
@@ -182,6 +183,7 @@ public:
     void Abort(Transaction& transaction, const std::function<void()>& before_unlock = {});
     Transaction& GetTransaction(transaction_id_t id);
     const Transaction& GetTransaction(transaction_id_t id) const;
+    bool OwnsTransaction(const Transaction& transaction) const;
     std::size_t GetActiveCount() const;
     static timestamp_t GetLastCommitTimestamp();
     static timestamp_t GetWatermark();
@@ -192,6 +194,7 @@ public:
     VersionLink AppendUndoRecord(Transaction& transaction, RID rid,
                                  const Record& record, TupleMeta meta);
     void RegisterWrite(Transaction& transaction, RID rid);
+    void RegisterAbortAction(Transaction& transaction, std::function<void()> action);
     void CheckWriteConflict(Transaction& transaction, TupleMeta current_meta);
     // Records reader -> writer without acquiring a blocking lock. Both
     // transactions must use SERIALIZABLE; committed reader state is retained.

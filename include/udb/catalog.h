@@ -71,6 +71,7 @@ public:
 
 private:
     friend class Database;
+    void PublishMutation();
     void RestoreTable(const TableMetadata& metadata);
     void RestoreNextId(table_id_t next_id);
     void RestoreIndex(const IndexMetadata& metadata);
@@ -95,6 +96,7 @@ private:
     // Name lookup is a simple linear scan for this first catalog.
     std::map<table_id_t, std::unique_ptr<Entry>> tables_;
     std::map<index_id_t, std::unique_ptr<Index>> indexes_;
+    std::function<void()> mutation_hook_;
     mutable std::recursive_mutex mutex_;
 };
 

@@ -131,6 +131,12 @@ Transaction& TransactionManager::RequireManaged(Transaction& transaction) {
     return *found->second;
 }
 
+bool TransactionManager::OwnsTransaction(const Transaction& transaction) const {
+    const std::lock_guard<std::mutex> lock(transactions_mutex_);
+    const auto found = transactions_.find(transaction.GetId());
+    return found != transactions_.end() && found->second.get() == &transaction;
+}
+
 void TransactionManager::Commit(Transaction& transaction) {
     auto& managed = RequireManaged(transaction);
     if (!managed.IsActive()) { throw std::logic_error("Transaction is not active"); }
@@ -175,6 +181,7 @@ void TransactionManager::Commit(Transaction& transaction) {
     managed.freed_pages_.clear();
     managed.write_rids_.clear();
     managed.stale_index_entries_.clear();
+    managed.abort_actions_.clear();
     managed.state_ = TransactionState::Committed;
     if (pool_ != nullptr) { pool_->ReleaseTransactionPages(managed); }
     if (lock_manager_ != nullptr) { lock_manager_->UnlockAll(managed); }
@@ -186,6 +193,10 @@ void TransactionManager::Abort(Transaction& transaction,
     auto& managed = RequireManaged(transaction);
     if (!managed.IsActive()) { throw std::logic_error("Transaction is not active"); }
     if (pool_ != nullptr) { pool_->RollbackTransaction(managed); }
+    for (auto action = managed.abort_actions_.rbegin();
+         action != managed.abort_actions_.rend(); ++action) {
+        (*action)();
+    }
     if (log_manager_ != nullptr) {
         managed.last_lsn_ = log_manager_->Append(LogRecord::Abort(managed.GetId()));
         log_manager_->Flush();
@@ -194,6 +205,7 @@ void TransactionManager::Abort(Transaction& transaction,
     managed.allocated_pages_.clear();
     managed.freed_pages_.clear();
     managed.write_rids_.clear();
+    managed.abort_actions_.clear();
     managed.state_ = TransactionState::Aborted;
     {
         const std::lock_guard<std::mutex> lock(timestamp_mutex_);
@@ -227,6 +239,14 @@ void TransactionManager::RegisterWrite(Transaction& transaction, RID rid) {
     if (!managed.IsActive()) { throw std::logic_error("Transaction is not active"); }
     if (rid.page_id < 0) { throw std::invalid_argument("Tuple write requires a valid RID"); }
     managed.write_rids_.insert(rid);
+}
+
+void TransactionManager::RegisterAbortAction(Transaction& transaction,
+                                             std::function<void()> action) {
+    auto& managed = RequireManaged(transaction);
+    if (!managed.IsActive()) { throw std::logic_error("Transaction is not active"); }
+    if (!action) { throw std::invalid_argument("Abort action must not be empty"); }
+    managed.abort_actions_.push_back(std::move(action));
 }
 
 void TransactionManager::CheckWriteConflict(Transaction& transaction,

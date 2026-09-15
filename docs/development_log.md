@@ -776,3 +776,12 @@
 - 测试结果：全新构建无警告，95 / 95 测试及 ASan / UBSan 通过，覆盖 v1–v5、free-page、索引、时间戳和重开，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 96：Transactional Catalog。
+
+
+## 阶段 96：Transactional Catalog
+
+- 做了什么：Catalog mutation 接入事务回滚与 system catalog 页写入，使表和索引元数据参与 WAL / ARIES。
+- 关键设计：成功 mutation 统一发布持久化 catalog；abort 在物理页回滚后执行逆向内存操作；table/index ID 保持单调。
+- 测试结果：全新构建无警告，96 / 96 测试及 ASan / UBSan 通过，覆盖 CREATE/DROP commit、rollback 与 crash recovery，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 97：Transactional DDL。
