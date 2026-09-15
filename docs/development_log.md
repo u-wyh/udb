@@ -728,3 +728,11 @@
 - 测试结果：全新构建无警告，89 / 89 测试及 ASan / UBSan 通过，覆盖多 loser、write/allocate/free、completed abort 与重复恢复，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 90：Crash During Recovery。
+
+## 阶段 90：Crash During Recovery
+
+- 做了什么：让 restart Undo 能从 durable CLR 的 undoNextLSN 继续，并支持可中断的分批 Undo。
+- 关键设计：Redo 先补写尚未落页的 CLR；已应用 CLR 只沿 undoNextLSN 前进；重复崩溃不重复补偿。
+- 测试结果：全新构建无警告，90 / 90 测试及 ASan / UBSan 通过，覆盖 CLR 刷盘前后中断、连续两次恢复崩溃与幂等重开，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 91：Fuzzy Checkpoint。

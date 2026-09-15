@@ -125,7 +125,8 @@ RecoveryRedoResult RecoveryManager::Redo(DiskManager& disk,
 }
 
 RecoveryUndoResult RecoveryManager::Undo(DiskManager& disk, LogManager& log_manager,
-                                         const RecoveryAnalysis& analysis) {
+                                         const RecoveryAnalysis& analysis,
+                                         std::size_t maximum_actions) {
     RecoveryUndoResult result;
     std::map<lsn_t, LogRecord> records;
     for (const auto& record : log_manager.GetRecords()) {
@@ -137,6 +138,10 @@ RecoveryUndoResult RecoveryManager::Undo(DiskManager& disk, LogManager& log_mana
         work.emplace(analysis.transaction_table.at(id).last_lsn, id);
     }
     while (!work.empty()) {
+        if (result.undone == maximum_actions) {
+            result.complete = false;
+            return result;
+        }
         const auto [lsn, transaction_id] = work.top();
         work.pop();
         const auto found = records.find(lsn);
@@ -147,6 +152,11 @@ RecoveryUndoResult RecoveryManager::Undo(DiskManager& disk, LogManager& log_mana
         std::optional<lsn_t> next = record.GetPrevLsn();
         if (record.GetType() == LogRecordType::Compensation) {
             next = record.GetUndoNextLsn();
+            if (!next) {
+                log_manager.Append(LogRecord::Abort(transaction_id));
+                log_manager.Flush();
+                ++result.completed_transactions;
+            }
         } else if (record.GetType() == LogRecordType::PageWrite ||
                    record.GetType() == LogRecordType::PageAllocate ||
                    record.GetType() == LogRecordType::PageFree) {

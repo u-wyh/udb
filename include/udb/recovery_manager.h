@@ -4,6 +4,7 @@
 #include "udb/log_manager.h"
 
 #include <map>
+#include <limits>
 #include <optional>
 #include <set>
 
@@ -40,6 +41,7 @@ struct RecoveryUndoResult {
     std::size_t undone = 0;
     std::size_t compensation_records = 0;
     std::size_t completed_transactions = 0;
+    bool complete = true;
     std::map<page_id_t, bool> page_states;
 };
 
@@ -49,7 +51,9 @@ public:
     static RecoveryRedoResult Redo(DiskManager& disk, const LogManager& log_manager,
                                    const RecoveryAnalysis& analysis);
     static RecoveryUndoResult Undo(DiskManager& disk, LogManager& log_manager,
-                                   const RecoveryAnalysis& analysis);
+                                   const RecoveryAnalysis& analysis,
+                                   std::size_t maximum_actions =
+                                       std::numeric_limits<std::size_t>::max());
     // Repeats history and reverses incomplete transactions with durable CLRs.
     static std::map<page_id_t, bool> Recover(
         DiskManager& disk, LogManager& log_manager);
