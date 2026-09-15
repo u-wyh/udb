@@ -2,8 +2,10 @@
 
 #include "udb/catalog.h"
 #include "udb/log_manager.h"
+#include "udb/system_catalog_storage.h"
 
 #include <map>
+#include <optional>
 
 namespace udb {
 
@@ -30,6 +32,7 @@ public:
 private:
     Database(const std::filesystem::path& data_path, std::size_t capacity);
     void LoadMetadata();
+    void WriteSystemCatalog();
     void SaveMetadata() const;
     void RequireOpen() const;
 
@@ -40,6 +43,7 @@ private:
     std::unique_ptr<DiskManager> disk_;
     std::unique_ptr<BufferPoolManager> pool_;
     std::unique_ptr<Catalog> catalog_;
+    std::optional<page_id_t> catalog_root_page_id_;
     std::map<page_id_t, bool> recovery_page_states_;
 };
 

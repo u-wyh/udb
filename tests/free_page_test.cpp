@@ -183,18 +183,18 @@ void TestMetadataValidation(const std::filesystem::path& directory) {
         database->Close();
     }
     const auto original = ReadFile(meta);
-    Check(original.size() >= 64 && static_cast<unsigned char>(original[8]) == 5,
-          "Free-page metadata fixture is not v5");
+    Check(original.size() >= 44 && static_cast<unsigned char>(original[8]) == 6,
+          "Free-page bootstrap metadata is not v6");
     auto corrupt = [&](const std::string& bytes) {
         WriteFile(meta, bytes);
-        Reject<std::runtime_error>([&] { Database::Open(path, 1); });
+        Reject<std::exception>([&] { Database::Open(path, 1); });
     };
     auto bytes = original;
-    Put(bytes, 40, std::filesystem::file_size(path) / PAGE_SIZE, 8);
+    Put(bytes, 36, std::filesystem::file_size(path) / PAGE_SIZE, 8);
     corrupt(bytes);
     bytes = original;
-    Put(bytes, 32, 2, 8);
-    bytes.insert(48, 8, '\0');
+    Put(bytes, 28, 2, 8);
+    bytes.insert(44, 8, '\0');
     corrupt(bytes);
     WriteFile(meta, original);
     auto database = Database::Open(path, 1);

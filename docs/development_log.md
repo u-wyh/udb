@@ -760,3 +760,11 @@
 - 测试结果：压力场景额外连续 5 次通过；全新构建无警告，93 / 93 测试及 ASan / UBSan 通过，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：STOP；重新评审 SQL 完整性、存储性能与后续高级功能路线。
+
+## 阶段 94：System Catalog Storage
+
+- 做了什么：将 Table、Column 与 Index schema metadata 写入版本化的数据库页链，`.meta` 仅保留 system catalog 根页、时间戳与 free-page 启动信息。
+- 关键设计：catalog page chain 带版本、总长度与校验；所有访问经过 BufferPool Page Guard；旧 v1–v5 metadata 读取路径继续保留。
+- 测试结果：全新构建无警告，94 / 94 测试及 ASan / UBSan 通过，覆盖多页 catalog、最小 bootstrap、重开和损坏检测，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 95：Catalog Migration。

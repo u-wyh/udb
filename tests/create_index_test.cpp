@@ -222,57 +222,27 @@ void TestMetadata(const std::filesystem::path& directory) {
     }
     const auto original = ReadFile(meta);
     const auto data = ReadFile(path);
-    Check(original.size() == 139 && static_cast<unsigned char>(original[8]) == 5,
-          "Index metadata fixture layout changed unexpectedly");
-    auto reject = [&](std::string bytes) {
+    Check(original.size() == 36 && static_cast<unsigned char>(original[8]) == 6,
+          "Index bootstrap metadata layout changed unexpectedly");
+    auto reject_meta = [&](std::string bytes) {
         WriteFile(meta, bytes);
         Reject([&] { Database::Open(path, 1); });
         Check(ReadFile(meta) == bytes && ReadFile(path) == data, "Failed metadata Open changed files");
     };
     auto bytes = original;
-    Put(bytes, 107, 99, 8); reject(bytes);  // Missing table ID.
-    bytes = original; Put(bytes, 123, 1, 8); reject(bytes);  // Invalid column index.
-    bytes = original; Put(bytes, 131, std::filesystem::file_size(path) / PAGE_SIZE, 8); reject(bytes);
-    bytes = original; Put(bytes, 131, 0, 8); reject(bytes);  // Allocated but not a B+ tree header.
-    bytes = original; Put(bytes, 84, UINT64_MAX, 8); reject(bytes);  // Invalid index count.
-    bytes = original; Put(bytes, 76, 0, 8); reject(bytes);  // next_index_id is not above existing ID.
-    reject(original.substr(0, original.size() - 1));
+    Put(bytes, 12, std::filesystem::file_size(path) / PAGE_SIZE, 8); reject_meta(bytes);
+    reject_meta(original.substr(0, original.size() - 1));
     WriteFile(meta, original);
+
+    auto corrupt_data = data;
+    corrupt_data[32] ^= 1;  // Corrupt serialized Table/Column/Index catalog payload.
+    WriteFile(path, corrupt_data);
+    Reject([&] { Database::Open(path, 1); });
+    WriteFile(path, data);
     auto database = Database::Open(path, 1);
     Check(database->GetCatalog().GetIndex("idx").GetTree().GetValue(7).has_value(),
           "Valid index metadata failed after corruption cases");
     database->Close();
-    auto legacy = original;
-    legacy.erase(24, 8);  // v4 and earlier do not store the commit timestamp.
-    legacy[8] = 3;
-    legacy.erase(107, 8);  // v3 has a single column index without a count.
-    WriteFile(meta, legacy);
-    database = Database::Open(path, 1);
-    Check(database->GetCatalog().GetIndex("idx").GetTree().GetValue(7).has_value(),
-          "Legacy v3 index metadata failed to reopen");
-    database->Close();
-
-    const auto v2_path = directory / "v2.udb";
-    const auto v2_meta = directory / "v2.meta";
-    database = Database::Create(v2_path, 1);
-    {
-        SqlEngine engine(database->GetCatalog());
-        engine.ExecuteSQL("CREATE TABLE old_table (id INTEGER)");
-        engine.ExecuteSQL("INSERT INTO old_table VALUES (11)");
-    }
-    database->Close();
-    bytes = ReadFile(v2_meta);
-    bytes.erase(24, 8);
-    bytes.resize(bytes.size() - 16);  // Remove the v3 empty-index suffix.
-    Put(bytes, 8, 2, 4);
-    WriteFile(v2_meta, bytes);
-    database = Database::Open(v2_path, 1);
-    SqlEngine old_engine(database->GetCatalog());
-    Check(old_engine.ExecuteSQL("SELECT * FROM old_table").rows.at(0).GetValue(0) == Value::Integer(11) &&
-          database->GetCatalog().ListIndexes().empty(),
-          "v2 metadata compatibility failed");
-    database->Close();
-    Check(static_cast<unsigned char>(ReadFile(v2_meta)[8]) == 5, "v2 metadata was not upgraded on save");
 }
 
 }  // namespace

@@ -26,7 +26,7 @@ add_library(udb_transaction src/transaction.cpp src/lock_manager.cpp)
 target_include_directories(udb_transaction PUBLIC include)
 target_link_libraries(udb_transaction PUBLIC udb_storage udb_wal)
 
-add_library(udb_catalog src/catalog.cpp src/database.cpp)
+add_library(udb_catalog src/catalog.cpp src/database.cpp src/system_catalog_storage.cpp)
 target_link_libraries(udb_catalog PUBLIC udb_storage udb_types udb_wal udb_recovery udb_transaction)
 
 add_library(udb_sql src/sql/lexer.cpp src/sql/parser.cpp)
@@ -75,6 +75,10 @@ add_test(NAME catalog COMMAND udb_catalog_test)
 add_executable(udb_database_test tests/database_test.cpp)
 target_link_libraries(udb_database_test PRIVATE udb_catalog)
 add_test(NAME database COMMAND udb_database_test)
+
+add_executable(udb_system_catalog_test tests/system_catalog_test.cpp)
+target_link_libraries(udb_system_catalog_test PRIVATE udb_catalog)
+add_test(NAME system_catalog_storage COMMAND udb_system_catalog_test)
 
 add_executable(udb_sql_test tests/sql_test.cpp)
 target_link_libraries(udb_sql_test PRIVATE udb_sql)
@@ -424,6 +428,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(udb_fuzzy_checkpoint_test PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(udb_wal_truncation_test PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(udb_aries_mvcc_ssi_stress_test PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(udb_system_catalog_test PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

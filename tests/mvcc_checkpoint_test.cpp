@@ -112,11 +112,9 @@ void TestVersionFourCompatibility(const std::filesystem::path& path) {
     }
     auto metadata = path;
     metadata.replace_extension(".meta");
-    std::ifstream input(metadata, std::ios::binary);
-    std::string bytes{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
-    Check(bytes.size() == 56, "Unexpected version 5 empty metadata size");
+    std::string bytes(48, '\0');
+    bytes.replace(0, 8, "UDBMETA1");
     bytes[8] = 4;
-    bytes.erase(24, 8);
     std::ofstream output(metadata, std::ios::binary | std::ios::trunc);
     output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
     output.close();

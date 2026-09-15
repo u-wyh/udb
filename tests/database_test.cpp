@@ -49,10 +49,11 @@ void TestLifecycle(const std::filesystem::path& directory) {
     {
         auto database = Database::Create(path, 1);
         Check(std::filesystem::exists(path) && std::filesystem::exists(meta), "Create did not produce two files");
-        Check(std::filesystem::file_size(path) == 0, "Create reserved a data page");
+        Check(std::filesystem::file_size(path) == udb::PAGE_SIZE, "Create did not reserve system catalog page");
         Check(database->GetCatalog().ListTables().empty(), "New catalog not empty");
         const auto bytes = ReadFile(meta);
-        Check(bytes.size() == 56 && bytes.substr(0, 8) == "UDBMETA1" && bytes[8] == 5, "Header fixture mismatch");
+        Check(bytes.size() == 36 && bytes.substr(0, 8) == "UDBMETA1" && bytes[8] == 6,
+              "Bootstrap metadata fixture mismatch");
         database->Close();
         database->Close();
         ExpectThrow<std::logic_error>([&] { database->GetCatalog(); });
@@ -68,7 +69,7 @@ void TestLifecycle(const std::filesystem::path& directory) {
         Check(catalog.ListTables().empty(), "Empty reopen failed");
         const auto& table = catalog.CreateTable("users", schema);
         first = table.GetFirstPageId();
-        Check(first == 0, "First table should use page zero");
+        Check(first == 1, "First table should follow the system catalog root");
         for (int i = 0; i < 10; ++i) {
             const Tuple tuple(schema, {Value::Boolean(i % 2 == 0), Value::Integer(i), Value::Null(TypeId::BIGINT),
                                        Value::Varchar(std::string(1400, static_cast<char>('a' + i)))});
@@ -144,42 +145,35 @@ void TestCorruption(const std::filesystem::path& directory) {
     }
     const auto original = ReadFile(meta);
     const auto data = ReadFile(path);
-    Check(original.size() == 126, "Metadata fixture length unexpected");
+    Check(original.size() == 36, "Bootstrap metadata fixture length unexpected");
     auto reject = [&](const std::string& bytes) {
         WriteFile(meta, bytes);
         ExpectThrow<std::exception>([&] { Database::Open(path, 1); });
         Check(ReadFile(path) == data && ReadFile(meta) == bytes, "Failed Open mutated database");
     };
     for (std::size_t size = 0; size < original.size(); ++size) { reject(original.substr(0, size)); }
-    for (const auto offset : {std::size_t{0}, std::size_t{8}, std::size_t{70}}) {
+    for (const auto offset : {std::size_t{0}, std::size_t{8}}) {
         auto bytes = original;
-        bytes[offset] = static_cast<char>(255);  // magic, version, type
+        bytes[offset] = static_cast<char>(255);
         reject(bytes);
     }
     auto bytes = original;
-    Put(bytes, 75, 0, 8); reject(bytes);  // Duplicate table ID.
-    bytes = original; bytes[87] = 'a'; reject(bytes);  // Duplicate name.
-    bytes = original; Put(bytes, 53, 999, 8); reject(bytes);  // Nonexistent first page.
-    bytes = original; Put(bytes, 53, UINT64_MAX, 8); reject(bytes);  // Negative ID encoding.
-    bytes = original; Put(bytes, 88, 0, 8); reject(bytes);  // Shared first page.
-    bytes = original; Put(bytes, 16, 1, 8); reject(bytes);  // next_table_id <= maximum.
-    bytes = original; Put(bytes, 12, UINT32_MAX, 4); reject(bytes);
-    bytes = original; Put(bytes, 24, UINT64_MAX, 8); reject(bytes);  // Transaction timestamp bit.
-    bytes = original; Put(bytes, 32, UINT64_MAX, 8); reject(bytes);
-    bytes = original; Put(bytes, 48, UINT32_MAX, 4); reject(bytes);
-    bytes = original; Put(bytes, 61, UINT32_MAX, 4); reject(bytes);
-    bytes = original; Put(bytes, 71, 1, 4); reject(bytes);  // INTEGER cannot have max length.
+    Put(bytes, 12, UINT64_MAX, 8); reject(bytes);  // Invalid catalog root.
+    bytes = original; Put(bytes, 28, UINT64_MAX, 8); reject(bytes);  // Invalid free-page count.
     reject(original + "x");
     WriteFile(meta, original);
     auto database = Database::Open(path, 1);
     Check(database->GetCatalog().ListTables().size() == 2, "Valid metadata failed after corruption tests");
     database.reset();
-    bytes = original;
-    Put(bytes, 16, 42, 8);
-    WriteFile(meta, bytes);
+
+    auto corrupted_data = data;
+    corrupted_data[28] ^= 1;  // Root page payload checksum.
+    WriteFile(path, corrupted_data);
+    ExpectThrow<std::exception>([&] { Database::Open(path, 1); });
+    WriteFile(path, data);
     database = Database::Open(path, 1);
-    Check(database->GetCatalog().CreateTable("gap", Schema({})).GetTableId() == 42,
-          "Persisted next_table_id was ignored");
+    Check(database->GetCatalog().CreateTable("after", Schema({})).GetTableId() == 2,
+          "System catalog next table ID was ignored");
 }
 
 void TestFailures(const std::filesystem::path& directory) {
