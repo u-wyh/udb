@@ -32,6 +32,7 @@ public:
 private:
     Database(const std::filesystem::path& data_path, std::size_t capacity);
     void LoadMetadata();
+    void MigrateLegacyMetadata();
     void WriteSystemCatalog();
     void SaveMetadata() const;
     void RequireOpen() const;

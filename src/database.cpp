@@ -20,7 +20,6 @@ namespace {
 // column_indexes:u64[], header_page_id:u64. v3 stored one column without a count.
 // All integers are little-endian. No struct layouts or native string objects.
 constexpr std::uint64_t kMagic = 0x314154454d424455;  // "UDBMETA1"
-constexpr std::uint32_t kLegacyVersion = 5;
 constexpr std::uint32_t kVersion = 6;
 constexpr std::uint64_t kCatalogMagic = 0x3154414353595355;  // "USYSCAT1"
 constexpr std::uint32_t kCatalogVersion = 1;
@@ -248,7 +247,7 @@ void Database::Close() {
 }
 
 void Database::WriteSystemCatalog() {
-    if (!catalog_root_page_id_) { return; }
+    if (!catalog_root_page_id_) { throw std::logic_error("System catalog is not initialized"); }
     const std::lock_guard<std::recursive_mutex> catalog_lock(catalog_->mutex_);
     const auto ids = catalog_->ListTables();
     std::vector<unsigned char> bytes;
@@ -284,55 +283,15 @@ void Database::WriteSystemCatalog() {
 }
 
 void Database::SaveMetadata() const {
+    if (!catalog_root_page_id_) { throw std::logic_error("System catalog is not initialized"); }
     std::vector<unsigned char> bytes;
-    if (catalog_root_page_id_) {
-        Write(bytes, kMagic, 8);
-        Write(bytes, kVersion, 4);
-        Write(bytes, static_cast<std::uint64_t>(*catalog_root_page_id_), 8);
-        Write(bytes, TransactionManager::GetLastCommitTimestamp(), 8);
-        Write(bytes, disk_->GetFreePageIds().size(), 8);
-        for (const auto page_id : disk_->GetFreePageIds()) {
-            Write(bytes, static_cast<std::uint64_t>(page_id), 8);
-        }
-    } else {
-        const std::lock_guard<std::recursive_mutex> catalog_lock(catalog_->mutex_);
-        const auto ids = catalog_->ListTables();
-        if (ids.size() > std::numeric_limits<std::uint32_t>::max()) {
-            throw std::length_error("Too many metadata tables");
-        }
-        Write(bytes, kMagic, 8);
-        Write(bytes, kLegacyVersion, 4);
-        Write(bytes, ids.size(), 4);
-        Write(bytes, catalog_->next_id_, 8);
-        Write(bytes, TransactionManager::GetLastCommitTimestamp(), 8);
-        Write(bytes, disk_->GetFreePageIds().size(), 8);
-        for (const auto page_id : disk_->GetFreePageIds()) {
-            Write(bytes, static_cast<std::uint64_t>(page_id), 8);
-        }
-        for (const auto id : ids) {
-            const auto& table = catalog_->GetTable(id);
-            Write(bytes, id, 8);
-            WriteString(bytes, table.GetTableName());
-            Write(bytes, static_cast<std::uint64_t>(table.GetFirstPageId()), 8);
-            Write(bytes, table.GetSchema().GetColumnCount(), 4);
-            for (const auto& column : table.GetSchema().GetColumns()) {
-                WriteString(bytes, column.GetName());
-                Write(bytes, EncodeType(column.GetType()), 1);
-                Write(bytes, column.GetMaxLength(), 4);
-            }
-        }
-        const auto index_ids = catalog_->ListIndexes();
-        Write(bytes, catalog_->next_index_id_, 8);
-        Write(bytes, index_ids.size(), 8);
-        for (const auto id : index_ids) {
-            const auto& metadata = catalog_->GetIndex(id).GetMetadata();
-            Write(bytes, id, 8);
-            WriteString(bytes, metadata.GetIndexName());
-            Write(bytes, metadata.GetTableId(), 8);
-            Write(bytes, metadata.GetColumnIndexes().size(), 8);
-            for (const auto column : metadata.GetColumnIndexes()) { Write(bytes, column, 8); }
-            Write(bytes, static_cast<std::uint64_t>(metadata.GetHeaderPageId()), 8);
-        }
+    Write(bytes, kMagic, 8);
+    Write(bytes, kVersion, 4);
+    Write(bytes, static_cast<std::uint64_t>(*catalog_root_page_id_), 8);
+    Write(bytes, TransactionManager::GetLastCommitTimestamp(), 8);
+    Write(bytes, disk_->GetFreePageIds().size(), 8);
+    for (const auto page_id : disk_->GetFreePageIds()) {
+        Write(bytes, static_cast<std::uint64_t>(page_id), 8);
     }
     if (bytes.size() > static_cast<std::uintmax_t>(std::numeric_limits<std::streamsize>::max())) {
         throw std::length_error("Metadata file is too large");
@@ -527,6 +486,16 @@ void Database::LoadMetadata() {
     if (reader.Remaining() != 0) { throw std::runtime_error("Trailing bytes in metadata"); }
     catalog_->RestoreNextId(next_id);
     catalog_->RestoreNextIndexId(next_index_id);
+    MigrateLegacyMetadata();
+}
+
+void Database::MigrateLegacyMetadata() {
+    catalog_root_page_id_ = SystemCatalogStorage::Create(*pool_);
+    WriteSystemCatalog();
+    log_manager_->Flush();
+    pool_->FlushAllPages();
+    disk_->Sync();
+    SaveMetadata();
 }
 
 }  // namespace udb

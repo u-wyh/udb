@@ -768,3 +768,11 @@
 - 测试结果：全新构建无警告，94 / 94 测试及 ASan / UBSan 通过，覆盖多页 catalog、最小 bootstrap、重开和损坏检测，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 95：Catalog Migration。
+
+## 阶段 95：Catalog Migration
+
+- 做了什么：打开 metadata v1–v5 数据库时，将旧 catalog 快照原地迁移到 v6 system catalog pages 与最小 bootstrap。
+- 关键设计：先完整验证旧 catalog 再发布 v6 bootstrap；迁移复用旧 free page，并保持 table/index root、commit timestamp 与 ARIES checkpoint 状态。
+- 测试结果：全新构建无警告，95 / 95 测试及 ASan / UBSan 通过，覆盖 v1–v5、free-page、索引、时间戳和重开，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 96：Transactional Catalog。

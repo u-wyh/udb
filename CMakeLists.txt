@@ -80,6 +80,10 @@ add_executable(udb_system_catalog_test tests/system_catalog_test.cpp)
 target_link_libraries(udb_system_catalog_test PRIVATE udb_catalog)
 add_test(NAME system_catalog_storage COMMAND udb_system_catalog_test)
 
+add_executable(udb_catalog_migration_test tests/catalog_migration_test.cpp)
+target_link_libraries(udb_catalog_migration_test PRIVATE udb_sql_engine)
+add_test(NAME catalog_migration COMMAND udb_catalog_migration_test)
+
 add_executable(udb_sql_test tests/sql_test.cpp)
 target_link_libraries(udb_sql_test PRIVATE udb_sql)
 add_test(NAME sql COMMAND udb_sql_test)
@@ -429,6 +433,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(udb_wal_truncation_test PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(udb_aries_mvcc_ssi_stress_test PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(udb_system_catalog_test PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(udb_catalog_migration_test PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
