@@ -23,7 +23,7 @@ namespace {
 constexpr std::uint64_t kMagic = 0x314154454d424455;  // "UDBMETA1"
 constexpr std::uint32_t kVersion = 6;
 constexpr std::uint64_t kCatalogMagic = 0x3154414353595355;  // "USYSCAT1"
-constexpr std::uint32_t kCatalogVersion = 5;
+constexpr std::uint32_t kCatalogVersion = 6;
 
 std::filesystem::path MetadataPath(const std::filesystem::path& path) {
     if (path.empty() || path.extension() != ".udb") {
@@ -344,6 +344,8 @@ void Database::WriteSystemCatalog() {
             Write(bytes, foreign_key.referenced_table_id, 8);
             Write(bytes, foreign_key.referenced_column_indexes.size(), 4);
             for (const auto column : foreign_key.referenced_column_indexes) { Write(bytes, column, 8); }
+            Write(bytes, static_cast<std::uint8_t>(foreign_key.on_delete), 1);
+            Write(bytes, static_cast<std::uint8_t>(foreign_key.on_update), 1);
         }
     }
     const auto index_ids = catalog_->ListIndexes();
@@ -526,8 +528,20 @@ void Database::LoadMetadata() {
                         }
                         target_columns.push_back(static_cast<std::size_t>(value));
                     }
+                    ForeignKeyAction on_delete = ForeignKeyAction::Restrict;
+                    ForeignKeyAction on_update = ForeignKeyAction::Restrict;
+                    if (catalog_version >= 6) {
+                        const auto decode_action = [](std::uint64_t value) {
+                            if (value > static_cast<std::uint64_t>(ForeignKeyAction::SetNull)) {
+                                throw std::runtime_error("Invalid system catalog FOREIGN KEY action");
+                            }
+                            return static_cast<ForeignKeyAction>(value);
+                        };
+                        on_delete = decode_action(catalog_reader.Read(1));
+                        on_update = decode_action(catalog_reader.Read(1));
+                    }
                     foreign_keys.push_back({std::move(source_columns), referenced_table,
-                                            std::move(target_columns)});
+                                            std::move(target_columns), on_delete, on_update});
                 }
             }
             catalog_->RestoreTable(TableMetadata(

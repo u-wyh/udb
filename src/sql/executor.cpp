@@ -273,7 +273,8 @@ void EnforceNoForeignKeyReferences(const Catalog& catalog, table_id_t parent_tab
     for (const auto child_id : catalog.ListTables()) {
         const auto& child = catalog.GetTable(child_id);
         for (const auto& foreign_key : child.GetSchema().GetForeignKeys()) {
-            if (foreign_key.referenced_table_id != parent_table_id) { continue; }
+            if (foreign_key.referenced_table_id != parent_table_id ||
+                foreign_key.on_delete != ForeignKeyAction::Restrict) { continue; }
             if (HasForeignKeyReference(catalog, child_id, foreign_key, parent, context)) {
                 throw std::invalid_argument("FOREIGN KEY RESTRICT prevents row change");
             }
@@ -287,7 +288,8 @@ void EnforceReferencedKeyUpdate(const Catalog& catalog, table_id_t parent_table_
     for (const auto child_id : catalog.ListTables()) {
         const auto& child = catalog.GetTable(child_id);
         for (const auto& foreign_key : child.GetSchema().GetForeignKeys()) {
-            if (foreign_key.referenced_table_id != parent_table_id) { continue; }
+            if (foreign_key.referenced_table_id != parent_table_id ||
+                foreign_key.on_update != ForeignKeyAction::Restrict) { continue; }
             bool changed = false;
             for (const auto column : foreign_key.referenced_column_indexes) {
                 if (before.GetValue(column) != after.GetValue(column)) { changed = true; }
@@ -298,6 +300,37 @@ void EnforceReferencedKeyUpdate(const Catalog& catalog, table_id_t parent_table_
         }
     }
 }
+
+BoundExpressionPtr ForeignKeyPredicate(const ForeignKeyConstraint& foreign_key,
+                                       const Tuple& parent) {
+    const auto source_column = foreign_key.column_indexes.front();
+    const auto& value = parent.GetValue(foreign_key.referenced_column_indexes.front());
+    auto left = std::make_shared<BoundExpression>(
+        value.GetType(), BoundColumnExpression{source_column});
+    auto right = std::make_shared<BoundExpression>(
+        value.GetType(), BoundLiteralExpression{value});
+    return std::make_shared<BoundExpression>(
+        TypeId::BOOLEAN,
+        BoundComparisonExpression{ComparisonOperator::Equal, std::move(left), std::move(right)});
+}
+
+class CascadeGuard {
+public:
+    explicit CascadeGuard(table_id_t table_id) {
+        if (std::find(stack_.begin(), stack_.end(), table_id) != stack_.end()) {
+            throw std::invalid_argument("FOREIGN KEY cascade cycle detected");
+        }
+        stack_.push_back(table_id);
+    }
+    ~CascadeGuard() { stack_.pop_back(); }
+    CascadeGuard(const CascadeGuard&) = delete;
+    CascadeGuard& operator=(const CascadeGuard&) = delete;
+
+private:
+    static thread_local std::vector<table_id_t> stack_;
+};
+
+thread_local std::vector<table_id_t> CascadeGuard::stack_;
 
 bool ReachedLimit(const std::optional<std::size_t>& limit, std::size_t row_count) {
     return limit && row_count >= *limit;
@@ -378,11 +411,24 @@ void AcquireExecutionLocks(const PlanNode& plan, StatementLockGuard& locks,
                 }
             }
             if (plan.GetType() == PlanType::Delete || plan.GetType() == PlanType::Update) {
+                bool cascading = false;
                 for (const auto table_id : catalog.ListTables()) {
                     for (const auto& foreign_key : catalog.GetTable(table_id).GetSchema().GetForeignKeys()) {
                         if (foreign_key.referenced_table_id == target && table_id != target) {
-                            required.emplace(table_id, LockMode::Shared);
+                            const auto action = plan.GetType() == PlanType::Delete
+                                ? foreign_key.on_delete : foreign_key.on_update;
+                            if (action == ForeignKeyAction::Restrict) {
+                                required.emplace(table_id, LockMode::Shared);
+                            } else {
+                                required[table_id] = LockMode::Exclusive;
+                                cascading = true;
+                            }
                         }
+                    }
+                }
+                if (cascading) {
+                    for (const auto table_id : catalog.ListTables()) {
+                        required[table_id] = LockMode::Exclusive;
                     }
                 }
             }
@@ -801,6 +847,7 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
         }
         case PlanType::Delete: {
             const auto& deletion = dynamic_cast<const DeletePlan&>(plan);
+            CascadeGuard cascade_guard(deletion.GetTableId());
             const auto& source = catalog_.GetTable(deletion.GetTableId()).GetSchema();
             CheckSchema(deletion.GetTableSchema(), source);
             const auto& predicate = deletion.GetPredicate();
@@ -828,6 +875,28 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
                 }
                 if (!remove) { continue; }
                 EnforceNoForeignKeyReferences(catalog_, deletion.GetTableId(), *tuple, context);
+                for (const auto child_id : catalog_.ListTables()) {
+                    const auto& child_schema = catalog_.GetTable(child_id).GetSchema();
+                    for (const auto& foreign_key : child_schema.GetForeignKeys()) {
+                        if (foreign_key.referenced_table_id != deletion.GetTableId() ||
+                            foreign_key.on_delete == ForeignKeyAction::Restrict ||
+                            !HasForeignKeyReference(catalog_, child_id, foreign_key, *tuple, context)) {
+                            continue;
+                        }
+                        auto predicate = ForeignKeyPredicate(foreign_key, *tuple);
+                        if (foreign_key.on_delete == ForeignKeyAction::Cascade) {
+                            const DeletePlan child_delete(child_id, child_schema, std::move(predicate));
+                            static_cast<void>(ExecutePlan(child_delete, context));
+                        } else {
+                            const auto column = foreign_key.column_indexes.front();
+                            const UpdatePlan child_update(
+                                child_id, child_schema,
+                                {{column, Value::Null(child_schema.GetColumn(column).GetType())}},
+                                std::move(predicate));
+                            static_cast<void>(ExecutePlan(child_update, context));
+                        }
+                    }
+                }
                 DeleteMatch match{*rid, {}};
                 for (const auto index_id : table_indexes) {
                     const auto& index = catalog_.GetIndex(index_id);
@@ -877,6 +946,7 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
         }
         case PlanType::Update: {
             const auto& update = dynamic_cast<const UpdatePlan&>(plan);
+            CascadeGuard cascade_guard(update.GetTableId());
             const auto& source = catalog_.GetTable(update.GetTableId()).GetSchema();
             CheckSchema(update.GetTableSchema(), source);
             if (update.GetAssignments().empty()) {
@@ -904,6 +974,8 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
             auto& heap = catalog_.GetTableHeap(update.GetTableId());
             struct Replacement {
                 RID rid;
+                Tuple before;
+                Tuple after;
                 Record record;
                 Record old_record;
                 TupleMeta old_meta;
@@ -935,7 +1007,7 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
                 EnforceForeignKeys(catalog_, source, replacement, context);
                 EnforceReferencedKeyUpdate(catalog_, update.GetTableId(), tuple,
                                            replacement, context);
-                Replacement pending{*rid, replacement.Serialize(source),
+                Replacement pending{*rid, tuple, replacement, replacement.Serialize(source),
                                     heap.GetRecord(*rid), heap.GetTupleMeta(*rid), {}};
                 for (const auto index_id : table_indexes) {
                     const auto& index = catalog_.GetIndex(index_id);
@@ -1017,6 +1089,28 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
                     }
                     if (change.new_key && !tree.Insert(*change.new_key, change.rid)) {
                         throw std::runtime_error("Index changed after UPDATE uniqueness check");
+                    }
+                }
+                for (const auto child_id : catalog_.ListTables()) {
+                    const auto& child_schema = catalog_.GetTable(child_id).GetSchema();
+                    for (const auto& foreign_key : child_schema.GetForeignKeys()) {
+                        if (foreign_key.referenced_table_id != update.GetTableId() ||
+                            foreign_key.on_update == ForeignKeyAction::Restrict) { continue; }
+                        const auto target_column = foreign_key.referenced_column_indexes.front();
+                        if (replacement.before.GetValue(target_column) ==
+                            replacement.after.GetValue(target_column) ||
+                            !HasForeignKeyReference(catalog_, child_id, foreign_key,
+                                                    replacement.before, context)) {
+                            continue;
+                        }
+                        const auto source_column = foreign_key.column_indexes.front();
+                        auto value = foreign_key.on_update == ForeignKeyAction::Cascade
+                            ? replacement.after.GetValue(target_column)
+                            : Value::Null(child_schema.GetColumn(source_column).GetType());
+                        const UpdatePlan child_update(
+                            child_id, child_schema, {{source_column, std::move(value)}},
+                            ForeignKeyPredicate(foreign_key, replacement.before));
+                        static_cast<void>(ExecutePlan(child_update, context));
                     }
                 }
                 ++affected;

@@ -8,15 +8,20 @@
 
 namespace udb {
 
+enum class ForeignKeyAction : std::uint8_t { Restrict, Cascade, SetNull };
+
 struct ForeignKeyConstraint {
     std::vector<std::size_t> column_indexes;
     std::uint64_t referenced_table_id;
     std::vector<std::size_t> referenced_column_indexes;
+    ForeignKeyAction on_delete = ForeignKeyAction::Restrict;
+    ForeignKeyAction on_update = ForeignKeyAction::Restrict;
 
     friend bool operator==(const ForeignKeyConstraint& a, const ForeignKeyConstraint& b) {
         return a.column_indexes == b.column_indexes &&
                a.referenced_table_id == b.referenced_table_id &&
-               a.referenced_column_indexes == b.referenced_column_indexes;
+               a.referenced_column_indexes == b.referenced_column_indexes &&
+               a.on_delete == b.on_delete && a.on_update == b.on_update;
     }
 };
 

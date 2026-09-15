@@ -134,6 +134,42 @@ CreateTableStatement Parser::CreateTable() {
                     Take(TokenType::Identifier, "referenced column").text);
             }
             Take(TokenType::RightParen, ")");
+            bool saw_delete = false;
+            bool saw_update = false;
+            while (current_.type == TokenType::On) {
+                Take(TokenType::On, "ON");
+                ForeignKeyAction* action = nullptr;
+                if (Match(TokenType::Delete)) {
+                    if (saw_delete) { throw SqlError("Duplicate ON DELETE", current_.position); }
+                    saw_delete = true;
+                    action = &foreign_key.on_delete;
+                } else if (Match(TokenType::Update)) {
+                    if (saw_update) { throw SqlError("Duplicate ON UPDATE", current_.position); }
+                    saw_update = true;
+                    action = &foreign_key.on_update;
+                } else {
+                    throw SqlError("Expected DELETE or UPDATE after ON", current_.position);
+                }
+                if (IsWord(current_, "CASCADE")) {
+                    Take(TokenType::Identifier, "CASCADE");
+                    *action = ForeignKeyAction::Cascade;
+                } else if (current_.type == TokenType::Set) {
+                    Take(TokenType::Set, "SET");
+                    Take(TokenType::Null, "NULL");
+                    *action = ForeignKeyAction::SetNull;
+                } else if (IsWord(current_, "RESTRICT")) {
+                    Take(TokenType::Identifier, "RESTRICT");
+                } else if (IsWord(current_, "NO")) {
+                    Take(TokenType::Identifier, "NO");
+                    if (!IsWord(current_, "ACTION")) {
+                        throw SqlError("Expected ACTION", current_.position);
+                    }
+                    Take(TokenType::Identifier, "ACTION");
+                } else {
+                    throw SqlError("Expected CASCADE, SET NULL, RESTRICT or NO ACTION",
+                                   current_.position);
+                }
+            }
             statement.foreign_keys.push_back(std::move(foreign_key));
             continue;
         }

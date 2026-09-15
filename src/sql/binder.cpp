@@ -329,7 +329,13 @@ BoundCreateTableStatement Binder::BindStatement(const CreateTableStatement& stat
         if (definition.GetColumn(source_column).GetType() != target.GetType()) {
             throw BindError("FOREIGN KEY column types do not match");
         }
-        foreign_keys.push_back({{source_column}, referenced.GetTableId(), {referenced_column}});
+        if ((foreign_key.on_delete == ForeignKeyAction::SetNull ||
+             foreign_key.on_update == ForeignKeyAction::SetNull) &&
+            definition.GetColumn(source_column).IsNotNull()) {
+            throw BindError("SET NULL requires a nullable FOREIGN KEY column");
+        }
+        foreign_keys.push_back({{source_column}, referenced.GetTableId(), {referenced_column},
+                                foreign_key.on_delete, foreign_key.on_update});
     }
     return {statement.table_name,
             Schema(definition.GetColumns(), std::move(checks), std::move(foreign_keys))};

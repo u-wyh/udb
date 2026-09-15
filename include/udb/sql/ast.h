@@ -1,6 +1,7 @@
 #pragma once
 
 #include "udb/type_id.h"
+#include "udb/schema.h"
 #include "udb/sql/aggregate.h"
 
 #include <memory>
@@ -43,6 +44,8 @@ struct ForeignKeyDefinition {
     std::vector<std::string> column_names;
     std::string referenced_table_name;
     std::vector<std::string> referenced_column_names;
+    ForeignKeyAction on_delete = ForeignKeyAction::Restrict;
+    ForeignKeyAction on_update = ForeignKeyAction::Restrict;
 };
 
 struct CreateTableStatement {

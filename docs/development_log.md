@@ -830,3 +830,12 @@
 - 测试结果：全新构建无警告，101 / 101 测试及 ASan / UBSan 通过，覆盖 NULL、失败原子性、事务回滚、RESTRICT 与 reopen，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 102：Foreign Key Actions。
+
+
+## 阶段 102：Foreign Key Actions
+
+- 做了什么：支持 ON DELETE/UPDATE CASCADE、SET NULL、RESTRICT 与 NO ACTION，并持久化动作元数据。
+- 关键设计：级联复用现有 UPDATE/DELETE Plan 和 MVCC/WAL 回滚路径；递归栈检测级联环；级联语句保守锁定相关表。
+- 测试结果：全新构建无警告，102 / 102 测试及 ASan / UBSan 通过，覆盖级联链、SET NULL、事务回滚、索引一致性和 reopen，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 103：Catalog + Constraint Stress。

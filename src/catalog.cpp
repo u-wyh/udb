@@ -122,6 +122,11 @@ const TableMetadata& Catalog::CreateTable(const std::string& name, const Schema&
             target_schema.GetColumn(target_column).GetType()) {
             throw std::invalid_argument("FOREIGN KEY column types do not match");
         }
+        if ((foreign_key.on_delete == ForeignKeyAction::SetNull ||
+             foreign_key.on_update == ForeignKeyAction::SetNull) &&
+            schema.GetColumn(source_column).IsNotNull()) {
+            throw std::invalid_argument("SET NULL requires a nullable FOREIGN KEY column");
+        }
     }
     if (next_id_ == std::numeric_limits<table_id_t>::max()) {
         throw std::overflow_error("Catalog table ID limit reached");
