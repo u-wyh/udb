@@ -1,4 +1,5 @@
 #include "udb/sql/binder.h"
+#include "udb/sql/parser.h"
 
 #include <algorithm>
 #include <limits>
@@ -34,6 +35,56 @@ Value BindLiteral(const Literal& literal, const Column& column) {
         if (column.GetType() == TypeId::BOOLEAN) { return Value::Boolean(*boolean); }
     }
     throw BindError("Literal type does not match column: " + column.GetName());
+}
+
+std::string SerializeLiteral(const Literal& literal) {
+    if (std::holds_alternative<std::monostate>(literal)) { return "NULL"; }
+    if (const auto* integer = std::get_if<std::int64_t>(&literal)) { return std::to_string(*integer); }
+    if (const auto* text = std::get_if<std::string>(&literal)) {
+        std::string result = "'";
+        for (const auto character : *text) {
+            result.push_back(character);
+            if (character == '\'') { result.push_back('\''); }
+        }
+        return result + "'";
+    }
+    if (const auto* boolean = std::get_if<bool>(&literal)) { return *boolean ? "TRUE" : "FALSE"; }
+    throw BindError("DEFAULT is not valid in CHECK");
+}
+
+std::string SerializeExpression(const ExpressionPtr& expression) {
+    if (!expression) { throw BindError("Missing CHECK expression"); }
+    if (const auto* column = std::get_if<ColumnExpression>(&expression->node)) { return column->name; }
+    if (const auto* literal = std::get_if<LiteralExpression>(&expression->node)) {
+        return SerializeLiteral(literal->value);
+    }
+    if (const auto* comparison = std::get_if<ComparisonExpression>(&expression->node)) {
+        const char* op = nullptr;
+        switch (comparison->op) {
+            case ComparisonOperator::Equal: op = "="; break;
+            case ComparisonOperator::NotEqual: op = "!="; break;
+            case ComparisonOperator::Less: op = "<"; break;
+            case ComparisonOperator::LessEqual: op = "<="; break;
+            case ComparisonOperator::Greater: op = ">"; break;
+            case ComparisonOperator::GreaterEqual: op = ">="; break;
+        }
+        return "(" + SerializeExpression(comparison->left) + " " + op + " " +
+               SerializeExpression(comparison->right) + ")";
+    }
+    if (const auto* arithmetic = std::get_if<ArithmeticExpression>(&expression->node)) {
+        const char* op = arithmetic->op == ArithmeticOperator::Add ? "+" :
+                         arithmetic->op == ArithmeticOperator::Subtract ? "-" :
+                         arithmetic->op == ArithmeticOperator::Multiply ? "*" : "/";
+        return "(" + SerializeExpression(arithmetic->left) + " " + op + " " +
+               SerializeExpression(arithmetic->right) + ")";
+    }
+    const auto& logical = std::get<LogicalExpression>(expression->node);
+    if (logical.op == LogicalOperator::Not) {
+        return "(NOT " + SerializeExpression(logical.left) + ")";
+    }
+    return "(" + SerializeExpression(logical.left) +
+           (logical.op == LogicalOperator::And ? " AND " : " OR ") +
+           SerializeExpression(logical.right) + ")";
 }
 
 std::size_t FindColumn(const Schema& schema, const std::string& name) {
@@ -250,7 +301,24 @@ BoundCreateTableStatement Binder::BindStatement(const CreateTableStatement& stat
                              column.not_null, std::move(default_value),
                              column.primary_key, column.unique);
     }
-    return {statement.table_name, Schema(std::move(columns))};
+    Schema definition(std::move(columns));
+    std::vector<std::string> checks;
+    checks.reserve(statement.checks.size());
+    for (const auto& check : statement.checks) {
+        static_cast<void>(BindExpression(check, definition, TypeId::BOOLEAN));
+        checks.push_back(SerializeExpression(check));
+    }
+    return {statement.table_name, Schema(definition.GetColumns(), std::move(checks))};
+}
+
+std::vector<BoundExpressionPtr> Binder::BindChecks(const Schema& schema) const {
+    std::vector<BoundExpressionPtr> checks;
+    checks.reserve(schema.GetCheckExpressions().size());
+    for (const auto& text : schema.GetCheckExpressions()) {
+        checks.push_back(BindExpression(Parser::ParseExpressionOnly(text), schema,
+                                        TypeId::BOOLEAN));
+    }
+    return checks;
 }
 
 BoundCreateIndexStatement Binder::BindStatement(const CreateIndexStatement& statement) const {

@@ -11,6 +11,9 @@
 
 namespace udb::sql {
 
+struct Expression;
+using ExpressionPtr = std::shared_ptr<const Expression>;
+
 struct DefaultLiteral {};
 
 // NULL is untyped until binding. Integers use signed 64-bit literal range;
@@ -37,8 +40,14 @@ struct ColumnDefinition {
 };
 
 struct CreateTableStatement {
+    CreateTableStatement() = default;
+    CreateTableStatement(std::string name, std::vector<ColumnDefinition> definitions,
+                         std::vector<ExpressionPtr> constraints = {})
+        : table_name(std::move(name)), columns(std::move(definitions)),
+          checks(std::move(constraints)) {}
     std::string table_name;
     std::vector<ColumnDefinition> columns;
+    std::vector<ExpressionPtr> checks;
 };
 
 struct CreateIndexStatement {
@@ -59,9 +68,6 @@ struct DropIndexStatement {
 enum class ComparisonOperator { Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual };
 enum class LogicalOperator { And, Or, Not };
 enum class ArithmeticOperator { Add, Subtract, Multiply, Divide };
-
-struct Expression;
-using ExpressionPtr = std::shared_ptr<const Expression>;
 
 struct ColumnExpression { std::string name; };
 struct LiteralExpression { Literal value; };

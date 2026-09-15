@@ -23,7 +23,7 @@ namespace {
 constexpr std::uint64_t kMagic = 0x314154454d424455;  // "UDBMETA1"
 constexpr std::uint32_t kVersion = 6;
 constexpr std::uint64_t kCatalogMagic = 0x3154414353595355;  // "USYSCAT1"
-constexpr std::uint32_t kCatalogVersion = 3;
+constexpr std::uint32_t kCatalogVersion = 4;
 
 std::filesystem::path MetadataPath(const std::filesystem::path& path) {
     if (path.empty() || path.extension() != ".udb") {
@@ -333,6 +333,10 @@ void Database::WriteSystemCatalog() {
             Write(bytes, column.IsPrimaryKey() ? 1 : 0, 1);
             Write(bytes, column.IsUnique() ? 1 : 0, 1);
         }
+        Write(bytes, table.GetSchema().GetCheckExpressions().size(), 4);
+        for (const auto& check : table.GetSchema().GetCheckExpressions()) {
+            WriteString(bytes, check);
+        }
     }
     const auto index_ids = catalog_->ListIndexes();
     Write(bytes, catalog_->next_index_id_, 8);
@@ -471,8 +475,20 @@ void Database::LoadMetadata() {
                 columns.emplace_back(std::move(column_name), type, max_length,
                                      not_null, std::move(default_value), primary_key, unique);
             }
-            catalog_->RestoreTable(TableMetadata(id, name, Schema(std::move(columns)),
-                                                 static_cast<page_id_t>(first)));
+            std::vector<std::string> checks;
+            if (catalog_version >= 4) {
+                const auto check_count = catalog_reader.Read(4);
+                if (check_count > catalog_reader.Remaining() / 4) {
+                    throw std::runtime_error("Invalid system catalog CHECK count");
+                }
+                checks.reserve(static_cast<std::size_t>(check_count));
+                for (std::uint64_t check = 0; check < check_count; ++check) {
+                    checks.push_back(catalog_reader.String());
+                }
+            }
+            catalog_->RestoreTable(TableMetadata(
+                id, name, Schema(std::move(columns), std::move(checks)),
+                static_cast<page_id_t>(first)));
         }
         const auto next_index_id = catalog_reader.Read(8);
         const auto index_count = catalog_reader.Read(8);

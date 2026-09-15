@@ -98,12 +98,26 @@ Statement Parser::Parse(std::string_view input) {
     return statement;
 }
 
+ExpressionPtr Parser::ParseExpressionOnly(std::string_view input) {
+    Parser parser(input);
+    auto expression = parser.ParseExpression();
+    parser.Take(TokenType::End, "end of expression");
+    return expression;
+}
+
 CreateTableStatement Parser::CreateTable() {
     Take(TokenType::Table, "TABLE");
     CreateTableStatement statement;
     statement.table_name = Take(TokenType::Identifier, "table name").text;
     Take(TokenType::LeftParen, "(");
     do {
+        if (IsWord(current_, "CHECK") && next_.type == TokenType::LeftParen) {
+            Take(TokenType::Identifier, "CHECK");
+            Take(TokenType::LeftParen, "(");
+            statement.checks.push_back(ParseExpression());
+            Take(TokenType::RightParen, ")");
+            continue;
+        }
         ColumnDefinition column;
         column.name = Take(TokenType::Identifier, "column name").text;
         if (Match(TokenType::Integer)) { column.type = TypeId::INTEGER; }
@@ -119,13 +133,12 @@ CreateTableStatement Parser::CreateTable() {
             }
             column.max_length = static_cast<std::uint32_t>(length);
             Take(TokenType::RightParen, ")");
-        } else {
-            throw SqlError("Expected column type", current_.position);
-        }
+        } else { throw SqlError("Expected column type", current_.position); }
         bool saw_not_null = false;
         bool saw_default = false;
         while (current_.type == TokenType::Not || current_.type == TokenType::Default ||
-               IsWord(current_, "PRIMARY") || IsWord(current_, "UNIQUE")) {
+               IsWord(current_, "PRIMARY") || IsWord(current_, "UNIQUE") ||
+               (IsWord(current_, "CHECK") && next_.type == TokenType::LeftParen)) {
             if (Match(TokenType::Not)) {
                 if (saw_not_null) { throw SqlError("Duplicate NOT NULL", current_.position); }
                 Take(TokenType::Null, "NULL");
@@ -134,9 +147,7 @@ CreateTableStatement Parser::CreateTable() {
             } else if (current_.type == TokenType::Default) {
                 const auto token = Take(TokenType::Default, "DEFAULT");
                 if (saw_default) { throw SqlError("Duplicate DEFAULT", token.position); }
-                if (current_.type == TokenType::Default) {
-                    throw SqlError("DEFAULT requires a literal", current_.position);
-                }
+                if (current_.type == TokenType::Default) { throw SqlError("DEFAULT requires a literal", current_.position); }
                 column.default_value = ParseLiteral();
                 saw_default = true;
             } else if (IsWord(current_, "PRIMARY")) {
@@ -145,10 +156,15 @@ CreateTableStatement Parser::CreateTable() {
                 if (!IsWord(current_, "KEY")) { throw SqlError("Expected KEY", current_.position); }
                 Take(TokenType::Identifier, "KEY");
                 column.primary_key = true;
-            } else {
+            } else if (IsWord(current_, "UNIQUE")) {
                 const auto token = Take(TokenType::Identifier, "UNIQUE");
                 if (column.unique) { throw SqlError("Duplicate UNIQUE", token.position); }
                 column.unique = true;
+            } else {
+                Take(TokenType::Identifier, "CHECK");
+                Take(TokenType::LeftParen, "(");
+                statement.checks.push_back(ParseExpression());
+                Take(TokenType::RightParen, ")");
             }
         }
         statement.columns.push_back(std::move(column));

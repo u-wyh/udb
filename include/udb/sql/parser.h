@@ -10,6 +10,7 @@ namespace udb::sql {
 class Parser {
 public:
     static Statement Parse(std::string_view input);
+    static ExpressionPtr ParseExpressionOnly(std::string_view input);
 
 private:
     explicit Parser(std::string_view input)

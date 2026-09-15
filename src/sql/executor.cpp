@@ -1,4 +1,5 @@
 #include "udb/sql/executor.h"
+#include "udb/sql/binder.h"
 #include "udb/sql/operator.h"
 
 #include <algorithm>
@@ -10,7 +11,10 @@ namespace udb::sql {
 namespace {
 
 bool SameColumn(const Column& a, const Column& b) {
-    return a.GetName() == b.GetName() && a.GetType() == b.GetType() && a.GetMaxLength() == b.GetMaxLength();
+    return a.GetName() == b.GetName() && a.GetType() == b.GetType() &&
+           a.GetMaxLength() == b.GetMaxLength() && a.IsNotNull() == b.IsNotNull() &&
+           a.GetDefaultValue() == b.GetDefaultValue() &&
+           a.IsPrimaryKey() == b.IsPrimaryKey() && a.IsUnique() == b.IsUnique();
 }
 
 Schema JoinSchema(const TableMetadata& left, const TableMetadata& right) {
@@ -34,6 +38,9 @@ void CheckSchema(const Schema& planned, const Schema& actual) {
         if (!SameColumn(planned.GetColumn(i), actual.GetColumn(i))) {
             throw std::invalid_argument("Plan target schema does not match catalog");
         }
+    }
+    if (planned.GetCheckExpressions() != actual.GetCheckExpressions()) {
+        throw std::invalid_argument("Plan CHECK constraints do not match catalog");
     }
 }
 
@@ -125,6 +132,18 @@ void CheckScan(const Schema& source, const Schema& output,
 
 bool Matches(const BoundExpressionPtr& predicate, const Tuple& tuple) {
     return FilterOperator::Matches(predicate, tuple);
+}
+
+void EnforceChecks(const std::vector<BoundExpressionPtr>& checks, const Tuple& tuple) {
+    for (const auto& check : checks) {
+        const auto value = EvaluateExpression(*check, tuple);
+        if (value.GetType() != TypeId::BOOLEAN) {
+            throw std::logic_error("CHECK expression did not evaluate to BOOLEAN");
+        }
+        if (!value.IsNull() && !value.GetBoolean()) {
+            throw std::invalid_argument("CHECK constraint failed");
+        }
+    }
 }
 
 TransactionManager* SnapshotVersions(const ExecutionContext* context) {
@@ -405,6 +424,7 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
             const auto& schema = catalog_.GetTable(insert.GetTableId()).GetSchema();
             CheckSchema(insert.GetTableSchema(), schema);
             const Tuple tuple(schema, insert.GetValues());
+            EnforceChecks(Binder(catalog_).BindChecks(schema), tuple);
             const auto record = tuple.Serialize(schema);
             std::vector<std::pair<index_id_t, IndexKey>> index_keys;
             for (const auto index_id : catalog_.GetTableIndexes(insert.GetTableId())) {
@@ -774,6 +794,7 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
                 throw std::invalid_argument("Plan predicate must be BOOLEAN");
             }
             CheckExpression(predicate, source);
+            const auto checks = Binder(catalog_).BindChecks(source);
             auto& heap = catalog_.GetTableHeap(update.GetTableId());
             struct Replacement {
                 RID rid;
@@ -804,6 +825,7 @@ ExecutionResult Executor::ExecutePlan(const PlanNode& plan, ExecutionContext* co
                     values[assignment.column_index] = assignment.value;
                 }
                 const Tuple replacement(source, std::move(values));
+                EnforceChecks(checks, replacement);
                 Replacement pending{*rid, replacement.Serialize(source),
                                     heap.GetRecord(*rid), heap.GetTupleMeta(*rid), {}};
                 for (const auto index_id : table_indexes) {

@@ -812,3 +812,12 @@
 - 测试结果：全新构建无警告，99 / 99 测试及 ASan / UBSan 通过，覆盖冲突原子性、NULL、事务回滚、重开和索引一致性，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 100：CHECK Constraint。
+
+
+## 阶段 100：CHECK Constraint
+
+- 做了什么：支持列级与表级 CHECK，并在 INSERT/UPDATE 时按 SQL 三值逻辑验证。
+- 关键设计：Catalog 持久化规范化约束表达式并在绑定时重建；FALSE 拒绝，TRUE/NULL 通过；批量 UPDATE 在写入前完成全部约束检查。
+- 测试结果：全新构建无警告，100 / 100 测试及 ASan / UBSan 通过，覆盖事务 DDL、约束持久化、NULL 语义和失败原子性，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 101：FOREIGN KEY 基础。

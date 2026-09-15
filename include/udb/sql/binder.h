@@ -17,6 +17,7 @@ class Binder {
 public:
     explicit Binder(const Catalog& catalog) : catalog_(catalog) {}
     BoundStatement Bind(const Statement& statement) const;
+    std::vector<BoundExpressionPtr> BindChecks(const Schema& schema) const;
 
 private:
     BoundCreateTableStatement BindStatement(const CreateTableStatement& statement) const;
