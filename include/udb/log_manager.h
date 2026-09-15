@@ -104,6 +104,7 @@ public:
     std::map<transaction_id_t, lsn_t> GetActiveTransactionTable() const;
     void WriteCheckpoint(const LogCheckpoint& checkpoint);
     std::optional<LogCheckpoint> ReadCheckpoint() const;
+    std::size_t TruncateForCheckpoint(const LogCheckpoint& checkpoint);
     // Used after a checkpoint has safely persisted data/metadata.
     void Reset();
     const std::vector<LogRecord>& GetRecords() const { return records_; }

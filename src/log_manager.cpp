@@ -493,7 +493,19 @@ bool LogManager::HasActiveTransactions() const {
 
 std::map<transaction_id_t, lsn_t> LogManager::GetActiveTransactionTable() const {
     const std::lock_guard<std::recursive_mutex> lock(mutex_);
-    return transaction_last_lsns_;
+    std::map<transaction_id_t, lsn_t> active;
+    for (const auto& record : records_) {
+        if (record.GetType() == LogRecordType::Begin) {
+            active.insert_or_assign(record.GetTransactionId(), record.GetLsn());
+        } else if (record.GetType() == LogRecordType::Commit ||
+                   record.GetType() == LogRecordType::Abort) {
+            active.erase(record.GetTransactionId());
+        } else {
+            const auto found = active.find(record.GetTransactionId());
+            if (found != active.end()) { found->second = record.GetLsn(); }
+        }
+    }
+    return active;
 }
 
 void LogManager::WriteCheckpoint(const LogCheckpoint& checkpoint) {
@@ -581,6 +593,102 @@ std::optional<LogCheckpoint> LogManager::ReadCheckpoint() const {
         }
     }
     return checkpoint;
+}
+
+std::size_t LogManager::TruncateForCheckpoint(const LogCheckpoint& checkpoint) {
+    const std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (checkpoint.checkpoint_lsn > next_lsn_) {
+        throw std::invalid_argument("Checkpoint LSN is ahead of the WAL");
+    }
+    if (records_.empty()) { return 0; }
+    lsn_t first_required = checkpoint.checkpoint_lsn;
+    for (const auto& [page_id, rec_lsn] : checkpoint.dirty_page_table) {
+        static_cast<void>(page_id);
+        first_required = std::min(first_required, rec_lsn);
+    }
+    std::map<transaction_id_t, lsn_t> begin_lsns;
+    for (const auto& record : records_) {
+        if (record.GetType() == LogRecordType::Begin) {
+            begin_lsns.emplace(record.GetTransactionId(), record.GetLsn());
+        }
+    }
+    for (const auto& [transaction_id, last_lsn] : checkpoint.transaction_table) {
+        static_cast<void>(last_lsn);
+        const auto begin = begin_lsns.find(transaction_id);
+        if (begin == begin_lsns.end()) {
+            throw std::invalid_argument("Checkpoint transaction has no WAL BEGIN");
+        }
+        first_required = std::min(first_required, begin->second);
+    }
+    // Never retain the tail of a transaction without its BEGIN. Lowering the
+    // boundary can expose another interleaved transaction, so close to a fixed point.
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (const auto& record : records_) {
+            if (record.GetLsn() < first_required) { continue; }
+            const auto begin = begin_lsns.find(record.GetTransactionId());
+            if (begin == begin_lsns.end()) {
+                throw std::runtime_error("WAL transaction has no BEGIN during truncation");
+            }
+            if (begin->second < first_required) {
+                first_required = begin->second;
+                changed = true;
+            }
+        }
+    }
+    const auto keep = std::lower_bound(
+        records_.begin(), records_.end(), first_required,
+        [](const LogRecord& record, lsn_t lsn) { return record.GetLsn() < lsn; });
+    const auto removed = static_cast<std::size_t>(std::distance(records_.begin(), keep));
+    if (removed == 0) { return 0; }
+
+    std::vector<unsigned char> bytes;
+    for (auto current = keep; current != records_.end(); ++current) {
+        const auto encoded = Encode(*current);
+        bytes.insert(bytes.end(), encoded.begin(), encoded.end());
+    }
+    auto temporary = path_;
+    temporary += ".tmp";
+    std::ofstream replacement(temporary, std::ios::binary | std::ios::trunc);
+    replacement.write(reinterpret_cast<const char*>(bytes.data()),
+                      static_cast<std::streamsize>(bytes.size()));
+    replacement.close();
+    if (!replacement) { throw std::runtime_error("Cannot write truncated WAL"); }
+    const auto descriptor = ::open(temporary.c_str(), O_RDONLY);
+    if (descriptor < 0) { throw std::runtime_error("Cannot open truncated WAL"); }
+    const auto sync_error = ::fsync(descriptor) != 0;
+    const auto close_error = ::close(descriptor) != 0;
+    if (sync_error || close_error) { throw std::runtime_error("Cannot durably sync truncated WAL"); }
+
+    output_.close();
+    if (!output_) { throw std::runtime_error("Cannot close WAL before truncation"); }
+    std::filesystem::rename(temporary, path_);
+    output_.open(path_, std::ios::binary | std::ios::app);
+    if (!output_) { throw std::runtime_error("Cannot reopen truncated WAL"); }
+    records_.erase(records_.begin(), keep);
+    transaction_last_lsns_.clear();
+    for (const auto& record : records_) {
+        if (record.GetType() == LogRecordType::Commit ||
+            record.GetType() == LogRecordType::Abort) {
+            transaction_last_lsns_.erase(record.GetTransactionId());
+        } else {
+            transaction_last_lsns_.insert_or_assign(record.GetTransactionId(), record.GetLsn());
+        }
+    }
+    persistent_lsn_ = records_.empty()
+        ? std::nullopt : std::optional<lsn_t>(records_.back().GetLsn());
+    PersistSequenceFloor();
+    auto parent = path_.parent_path();
+    if (parent.empty()) { parent = "."; }
+    const auto directory = ::open(parent.c_str(), O_RDONLY | O_DIRECTORY);
+    if (directory < 0) { throw std::runtime_error("Cannot open WAL directory after truncation"); }
+    const auto directory_sync_error = ::fsync(directory) != 0;
+    const auto directory_close_error = ::close(directory) != 0;
+    if (directory_sync_error || directory_close_error) {
+        throw std::runtime_error("Cannot durably sync WAL directory after truncation");
+    }
+    return removed;
 }
 
 void LogManager::Reset() {

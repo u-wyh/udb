@@ -744,3 +744,11 @@
 - 测试结果：全新构建无警告，91 / 91 测试及 ASan / UBSan 通过，覆盖 loser/winner 跨 checkpoint、TT/DPT 持久化和重开恢复，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 92：WAL Truncation。
+
+## 阶段 92：WAL Truncation
+
+- 做了什么：依据 fuzzy checkpoint、DPT recLSN 与活跃事务链安全回收 WAL 前缀。
+- 关键设计：截断边界向前闭包到所有保留事务的 BEGIN；WAL 以 durable 临时文件原子替换；LSN 不因截断复用。
+- 测试结果：全新构建无警告，92 / 92 测试及 ASan / UBSan 通过，覆盖交错事务、安全边界、截断后 loser undo 与 LSN 单调，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 93：ARIES + MVCC + SSI Stress。

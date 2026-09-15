@@ -224,6 +224,7 @@ void Database::Checkpoint() {
             LogCheckpoint{log_manager_->GetNextLsn(), {}, {}});
     } else {
         log_manager_->WriteCheckpoint(checkpoint);
+        log_manager_->TruncateForCheckpoint(checkpoint);
     }
 }
 
