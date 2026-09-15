@@ -6,6 +6,18 @@
 namespace udb::sql {
 namespace {
 
+bool IsWord(const Token& token, std::string_view word) {
+    if (token.type != TokenType::Identifier || token.text.size() != word.size()) { return false; }
+    for (std::size_t i = 0; i < word.size(); ++i) {
+        auto character = token.text[i];
+        if (character >= 'a' && character <= 'z') {
+            character = static_cast<char>(character - 'a' + 'A');
+        }
+        if (character != word[i]) { return false; }
+    }
+    return true;
+}
+
 std::int64_t IntegerValue(const Token& token) {
     std::int64_t value = 0;
     const auto end = token.text.data() + token.text.size();
@@ -112,13 +124,14 @@ CreateTableStatement Parser::CreateTable() {
         }
         bool saw_not_null = false;
         bool saw_default = false;
-        while (current_.type == TokenType::Not || current_.type == TokenType::Default) {
+        while (current_.type == TokenType::Not || current_.type == TokenType::Default ||
+               IsWord(current_, "PRIMARY") || IsWord(current_, "UNIQUE")) {
             if (Match(TokenType::Not)) {
                 if (saw_not_null) { throw SqlError("Duplicate NOT NULL", current_.position); }
                 Take(TokenType::Null, "NULL");
                 column.not_null = true;
                 saw_not_null = true;
-            } else {
+            } else if (current_.type == TokenType::Default) {
                 const auto token = Take(TokenType::Default, "DEFAULT");
                 if (saw_default) { throw SqlError("Duplicate DEFAULT", token.position); }
                 if (current_.type == TokenType::Default) {
@@ -126,6 +139,16 @@ CreateTableStatement Parser::CreateTable() {
                 }
                 column.default_value = ParseLiteral();
                 saw_default = true;
+            } else if (IsWord(current_, "PRIMARY")) {
+                const auto token = Take(TokenType::Identifier, "PRIMARY");
+                if (column.primary_key) { throw SqlError("Duplicate PRIMARY KEY", token.position); }
+                if (!IsWord(current_, "KEY")) { throw SqlError("Expected KEY", current_.position); }
+                Take(TokenType::Identifier, "KEY");
+                column.primary_key = true;
+            } else {
+                const auto token = Take(TokenType::Identifier, "UNIQUE");
+                if (column.unique) { throw SqlError("Duplicate UNIQUE", token.position); }
+                column.unique = true;
             }
         }
         statement.columns.push_back(std::move(column));

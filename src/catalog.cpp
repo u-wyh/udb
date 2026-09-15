@@ -92,6 +92,16 @@ const TableMetadata& Catalog::CreateTable(const std::string& name, const Schema&
             throw std::invalid_argument("Table name already exists");
         }
     }
+    std::size_t primary_keys = 0;
+    for (std::size_t column = 0; column < schema.GetColumnCount(); ++column) {
+        const auto& definition = schema.GetColumn(column);
+        if (definition.IsPrimaryKey() && ++primary_keys > 1) {
+            throw std::invalid_argument("Table supports one PRIMARY KEY");
+        }
+        if (definition.IsUnique()) {
+            static_cast<void>(IndexKeyWidth(schema, std::vector<std::size_t>{column}));
+        }
+    }
     if (next_id_ == std::numeric_limits<table_id_t>::max()) {
         throw std::overflow_error("Catalog table ID limit reached");
     }
@@ -106,7 +116,37 @@ const TableMetadata& Catalog::CreateTable(const std::string& name, const Schema&
             tables_.erase(created_id);
         });
     }
-    PublishMutation();
+    try {
+        for (std::size_t column = 0; column < schema.GetColumnCount(); ++column) {
+            if (!schema.GetColumn(column).IsUnique()) { continue; }
+            auto index_name = "__udb_constraint_" + std::to_string(created_id) + "_" +
+                              std::to_string(column);
+            while (std::any_of(indexes_.begin(), indexes_.end(), [&](const auto& item) {
+                return item.second->GetMetadata().GetIndexName() == index_name;
+            })) {
+                index_name.push_back('_');
+            }
+            CreateIndex(index_name, created_id, column);
+        }
+        PublishMutation();
+    } catch (...) {
+        const auto transactional = pool_.GetActiveTransaction() != nullptr &&
+            transaction_manager_.OwnsTransaction(*pool_.GetActiveTransaction());
+        if (!transactional) {
+            for (auto index = indexes_.begin(); index != indexes_.end();) {
+                if (index->second->GetMetadata().GetTableId() == created_id) {
+                    index->second->GetTree().DeletePages();
+                    index = indexes_.erase(index);
+                } else {
+                    ++index;
+                }
+            }
+            inserted.first->second->heap.DeletePages();
+            tables_.erase(created_id);
+            PublishMutation();
+        }
+        throw;
+    }
     return inserted.first->second->metadata;
 }
 
@@ -149,6 +189,11 @@ void Catalog::DropIndex(index_id_t id) {
     const auto found = indexes_.find(id);
     if (found == indexes_.end()) { throw std::out_of_range("Index ID not found"); }
     const auto metadata = found->second->GetMetadata();
+    const auto& table_schema = tables_.at(metadata.GetTableId())->metadata.GetSchema();
+    if (metadata.GetColumnIndexes().size() == 1 &&
+        table_schema.GetColumn(metadata.GetColumnIndex()).IsUnique()) {
+        throw std::invalid_argument("Cannot drop an index that enforces a table constraint");
+    }
     found->second->GetTree().DeletePages();
     indexes_.erase(found);
     if (auto* transaction = pool_.GetActiveTransaction();

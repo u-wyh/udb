@@ -96,6 +96,10 @@ add_executable(udb_column_constraint_test tests/column_constraint_test.cpp)
 target_link_libraries(udb_column_constraint_test PRIVATE udb_sql_engine)
 add_test(NAME column_constraints COMMAND udb_column_constraint_test)
 
+add_executable(udb_key_constraint_test tests/key_constraint_test.cpp)
+target_link_libraries(udb_key_constraint_test PRIVATE udb_sql_engine)
+add_test(NAME key_constraints COMMAND udb_key_constraint_test)
+
 add_executable(udb_sql_test tests/sql_test.cpp)
 target_link_libraries(udb_sql_test PRIVATE udb_sql)
 add_test(NAME sql COMMAND udb_sql_test)
@@ -449,6 +453,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(udb_transactional_catalog_test PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(udb_transactional_ddl_test PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(udb_column_constraint_test PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(udb_key_constraint_test PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

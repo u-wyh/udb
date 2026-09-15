@@ -803,3 +803,12 @@
 - 测试结果：全新构建无警告，98 / 98 测试及 ASan / UBSan 通过，覆盖约束、各类型默认值、事务、重开和旧 catalog，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 99：PRIMARY KEY / UNIQUE。
+
+
+## 阶段 99：PRIMARY KEY / UNIQUE
+
+- 做了什么：支持列级 PRIMARY KEY 与 UNIQUE，Catalog 自动建立持久化唯一索引，PRIMARY KEY 隐含 NOT NULL。
+- 关键设计：约束索引复用现有 B+ Tree、DML/MVCC/WAL 路径；约束索引不可单独 DROP；system catalog payload v3 兼容旧版本。
+- 测试结果：全新构建无警告，99 / 99 测试及 ASan / UBSan 通过，覆盖冲突原子性、NULL、事务回滚、重开和索引一致性，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：阶段 100：CHECK Constraint。

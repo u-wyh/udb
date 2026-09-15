@@ -23,7 +23,7 @@ namespace {
 constexpr std::uint64_t kMagic = 0x314154454d424455;  // "UDBMETA1"
 constexpr std::uint32_t kVersion = 6;
 constexpr std::uint64_t kCatalogMagic = 0x3154414353595355;  // "USYSCAT1"
-constexpr std::uint32_t kCatalogVersion = 2;
+constexpr std::uint32_t kCatalogVersion = 3;
 
 std::filesystem::path MetadataPath(const std::filesystem::path& path) {
     if (path.empty() || path.extension() != ".udb") {
@@ -330,6 +330,8 @@ void Database::WriteSystemCatalog() {
             Write(bytes, column.IsNotNull() ? 1 : 0, 1);
             Write(bytes, column.GetDefaultValue().has_value() ? 1 : 0, 1);
             if (column.GetDefaultValue()) { WriteValue(bytes, *column.GetDefaultValue()); }
+            Write(bytes, column.IsPrimaryKey() ? 1 : 0, 1);
+            Write(bytes, column.IsUnique() ? 1 : 0, 1);
         }
     }
     const auto index_ids = catalog_->ListIndexes();
@@ -455,8 +457,19 @@ void Database::LoadMetadata() {
                     not_null = required == 1;
                     if (has_default == 1) { default_value = ReadValue(catalog_reader, type); }
                 }
+                bool primary_key = false;
+                bool unique = false;
+                if (catalog_version >= 3) {
+                    const auto primary = catalog_reader.Read(1);
+                    const auto is_unique = catalog_reader.Read(1);
+                    if (primary > 1 || is_unique > 1) {
+                        throw std::runtime_error("Invalid system catalog key constraint flags");
+                    }
+                    primary_key = primary == 1;
+                    unique = is_unique == 1;
+                }
                 columns.emplace_back(std::move(column_name), type, max_length,
-                                     not_null, std::move(default_value));
+                                     not_null, std::move(default_value), primary_key, unique);
             }
             catalog_->RestoreTable(TableMetadata(id, name, Schema(std::move(columns)),
                                                  static_cast<page_id_t>(first)));

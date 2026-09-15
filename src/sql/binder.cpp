@@ -228,8 +228,17 @@ BoundCreateTableStatement Binder::BindStatement(const CreateTableStatement& stat
         }
     }
     std::vector<Column> columns;
+    std::size_t primary_key_count = 0;
     for (const auto& column : statement.columns) {
-        const Column definition(column.name, column.type, column.max_length, column.not_null);
+        if (column.primary_key && ++primary_key_count > 1) {
+            throw BindError("CREATE TABLE supports one PRIMARY KEY");
+        }
+        if ((column.primary_key || column.unique) && column.type != TypeId::INTEGER &&
+            column.type != TypeId::BIGINT && column.type != TypeId::VARCHAR) {
+            throw BindError("PRIMARY KEY and UNIQUE require an indexable column");
+        }
+        const Column definition(column.name, column.type, column.max_length,
+                                column.not_null || column.primary_key);
         std::optional<Value> default_value;
         if (column.default_value) {
             if (std::holds_alternative<DefaultLiteral>(*column.default_value)) {
@@ -238,7 +247,8 @@ BoundCreateTableStatement Binder::BindStatement(const CreateTableStatement& stat
             default_value = BindLiteral(*column.default_value, definition);
         }
         columns.emplace_back(column.name, column.type, column.max_length,
-                             column.not_null, std::move(default_value));
+                             column.not_null, std::move(default_value),
+                             column.primary_key, column.unique);
     }
     return {statement.table_name, Schema(std::move(columns))};
 }

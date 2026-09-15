@@ -22,14 +22,18 @@ struct ColumnDefinition {
     ColumnDefinition() = default;
     ColumnDefinition(std::string column_name, TypeId column_type,
                      std::uint32_t length = 0, bool required = false,
-                     std::optional<Literal> default_literal = std::nullopt)
+                     std::optional<Literal> default_literal = std::nullopt,
+                     bool primary = false, bool is_unique = false)
         : name(std::move(column_name)), type(column_type), max_length(length),
-          not_null(required), default_value(std::move(default_literal)) {}
+          not_null(required), default_value(std::move(default_literal)),
+          primary_key(primary), unique(is_unique) {}
     std::string name;
     TypeId type = TypeId::INTEGER;
     std::uint32_t max_length = 0;
     bool not_null = false;
     std::optional<Literal> default_value;
+    bool primary_key = false;
+    bool unique = false;
 };
 
 struct CreateTableStatement {
