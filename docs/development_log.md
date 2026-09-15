@@ -839,3 +839,12 @@
 - 测试结果：全新构建无警告，102 / 102 测试及 ASan / UBSan 通过，覆盖级联链、SET NULL、事务回滚、索引一致性和 reopen，git diff --check 通过。
 - Commit：见 Git 历史
 - 下一步：阶段 103：Catalog + Constraint Stress。
+
+
+## 阶段 103：Catalog + Constraint Stress
+
+- 做了什么：新增 Catalog、DDL、约束、MVCC/SSI、ARIES 与 reopen 的综合重复压力测试。
+- 关键设计：真实 fork crash 同时覆盖 committed/loser catalog mutation；组合验证约束级联、fuzzy checkpoint、schema lock 与索引一致性。
+- 测试结果：全新构建无警告，103 / 103 测试及 ASan / UBSan 通过，综合场景连续两轮且重复 recovery 一致，git diff --check 通过。
+- Commit：见 Git 历史
+- 下一步：STOP；重新评审 storage performance 与 optimizer 后再制定路线。
